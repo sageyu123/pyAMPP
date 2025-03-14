@@ -617,13 +617,15 @@ class GxBox(QMainWindow):
         uic.loadUi(Path(__file__).parent / "UI" / "gxbox.ui", self)
 
         # Matplotlib Figure
-        self.fig = plt.Figure()
+        self.fig = plt.Figure(figsize=(9,6))
         self.canvas = FigureCanvas(self.fig)
         self.canvasLayout.addWidget(self.canvas)
 
         # Add Matplotlib Navigation Toolbar
         self.toolbar = NavigationToolbar(self.canvas, self)
         self.canvasLayout.addWidget(self.toolbar)
+
+        # self.controlLayout.SetFixedSize(300)
 
         self.mapBottomSelector.addItems(list(self.avaliable_maps))
         self.mapBottomSelector.setCurrentIndex(self.avaliable_maps.index(self.init_map_bottom_name))
@@ -660,45 +662,63 @@ class GxBox(QMainWindow):
 
         self.update_plot()
 
+        print(self.map_context.dimensions)
         map_context_aspect_ratio = (self.map_context.dimensions[1] / self.map_context.dimensions[0]).value
-        window_width = 800
+        window_width = 900
         window_height = int(window_width * map_context_aspect_ratio)
 
         # Adjust for padding, toolbar, and potential high DPI scaling
-        window_width += 0  # Adjust based on your UI needs
-        window_height += 150  # Includes space for toolbar and dropdowns
+        window_width += 200  # Adjust based on your UI needs
+        window_height += 0  # Includes space for toolbar and dropdowns
 
         self.setGeometry(100, 100, int(window_width), int(window_height))
+        self.splitter.setSizes([900, 200])
 
     def visualize_3d_magnetic_field(self):
         """
         Launches the MagneticFieldVisualizer to visualize the 3D magnetic field data.
         """
+        import time
+
         box_norm_direction = self.box_norm_direction()
         box_view_up = self.box_view_up()
         b3dtype = self.b3dModelSelector.currentText()
         # print(f'type of self.box.b3d is {type(self.box.b3d)}')
         # print(f'value of self.box.b3d is {self.box.b3d}')
         # if b3dtype == 'pot':
+        print('##############')
+        print('##############')
+        print('##############')
+        print('##############')
+        print('##############')
         if b3dtype == 'nlfff' and self.box.b3d['nlfff'] is not None:
-            pass
+            print(f'Using existing nlfff solution...')
         else:
-            if self.box.b3d['pot'] is None:
-                if self.mapBottomSelector.currentText() != 'br':
-                    self.mapBottomSelector.setCurrentIndex(self.avaliable_maps.index('br'))
-                maglib_lff = MagFieldLinFFF()
-                bnddata = self.map_bottom.data
-                bnddata[np.isnan(bnddata)] = 0.0
+            if b3dtype =='pot':
+                if self.box.b3d['pot'] is None:
+                    print(f'Starting potential field computation...')
+                    t0 = time.time()
+                    if self.mapBottomSelector.currentText() != 'br':
+                        self.mapBottomSelector.setCurrentIndex(self.avaliable_maps.index('br'))
+                    maglib_lff = MagFieldLinFFF()
+                    bnddata = self.map_bottom.data
+                    bnddata[np.isnan(bnddata)] = 0.0
 
-                maglib_lff.set_field(bnddata)
-                ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
-                self.pot_res = maglib_lff.lfff_cube(nz = self.box.dims_pix[-1].value, alpha=0.0)
-                self.box.b3d['pot'] = {}
-                self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
-                self.box.b3d['pot']['by'] = self.pot_res['bx'].swapaxes(0, 1)
-                self.box.b3d['pot']['bz'] = self.pot_res['bz'].swapaxes(0, 1)
-
-            if b3dtype == 'nlfff':
+                    maglib_lff.set_field(bnddata)
+                    ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
+                    self.pot_res = maglib_lff.lfff_cube(nz = self.box.dims_pix[-1].value, alpha=0.0)
+                    print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
+                    self.box.b3d['pot'] = {}
+                    self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
+                    self.box.b3d['pot']['by'] = self.pot_res['bx'].swapaxes(0, 1)
+                    self.box.b3d['pot']['bz'] = self.pot_res['bz'].swapaxes(0, 1)
+                else:
+                    print(f'Using existing potential field solution...')
+                    # self.pot_res = {}
+                    # self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
+                    # self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
+                    # self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
+            elif b3dtype == 'nlfff':
                 self.box.b3d['nlfff'] = {}
                 # if 'lfff' not in self.box.b3d.keys():
                 #     self.box.b3d['lfff'] = {}
@@ -723,19 +743,25 @@ class GxBox(QMainWindow):
                 by_lff[:, :, 0] = self.bvect_bottom_data['by']
                 bz_lff[:, :, 0] = self.bvect_bottom_data['bz']
 
-                import time
-                t0 = time.time()
+
                 print(f'Starting NLFFF computation...')
+                t0 = time.time()
                 maglib = MagFieldProcessor()
+                if self.pot_res is None:
+                    self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
+                    self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
+                    self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
                 maglib.load_cube_vars(self.pot_res)
 
                 res_nlf = maglib.NLFFF()
-                print(f'Time taken to compute NLFFF solution: {time.time() - t0} seconds')
+                print(f'Time taken to compute NLFFF solution: {time.time() - t0:.1f} seconds')
 
                 bx_nlff, by_nlff, bz_nlff = [res_nlf[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
                 self.box.b3d['nlfff']['bx'] = bx_nlff
                 self.box.b3d['nlfff']['by'] = by_nlff
                 self.box.b3d['nlfff']['bz'] = bz_nlff
+
+
 
 
         self.visualizer = MagFieldViewer(self.box, parent=self, box_norm_direction=box_norm_direction,
