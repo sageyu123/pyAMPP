@@ -86,15 +86,17 @@ class Box:
         Initializes the Box instance with origin, dimensions, and computes the corners and edges.
 
         :param box_center: SkyCoord, the origin point of the box in a given coordinate frame.
-        :param box_dims: u.Quantity, the dimensions of the box (x, y, z) in specified units. x and y are in the solar frame, z is the height above the solar surface.
+        :param box_dims: u.Quantity, the dimensions of the box (x, y, z) in pixel units. x and y are in the solar frame, z is the height above the solar surface.
         '''
         self._frame_obs = frame_obs
         with Helioprojective.assume_spherical_screen(frame_obs.observer):
             self._origin = box_origin
             self._center = box_center
-        self._dims = box_dims
+        print(f'box_dims: {box_dims}, box_res: {box_res}')
+        self._dims = box_dims/u.pix * box_res
         self._res = box_res
-        self._dims_pix = np.int_(np.round(self._dims / self._res.to(self._dims.unit)))
+        self._dims_pix = np.int_(box_dims.value)
+        print(f'box_dims_pix: {self._dims_pix}, box_res: {self._res}','_dims:', self._dims)
         # Generate corner points based on the dimensions
         self.corners = list(itertools.product(self._dims[0] / 2 * [-1, 1],
                                               self._dims[1] / 2 * [-1, 1],
@@ -342,7 +344,7 @@ class Box:
 
 
 class GxBox(QMainWindow):
-    def __init__(self, time, observer, box_orig, box_dims=u.Quantity([100, 100, 100]) * u.Mm,
+    def __init__(self, time, observer, box_orig, box_dims=u.Quantity([100, 100, 100]) * u.pix,
                  box_res=1.4 * u.Mm, pad_frac=0.25, data_dir=DOWNLOAD_DIR, gxmodel_dir=GXMODEL_DIR, external_box=None):
         """
         Main application window for visualizing and interacting with solar data in a 3D box.
@@ -353,7 +355,7 @@ class GxBox(QMainWindow):
         :type observer: `~astropy.coordinates.SkyCoord`
         :param box_orig: The origin of the box (center of the box bottom).
         :type box_orig: `~astropy.coordinates.SkyCoord`
-        :param box_dims: Dimensions of the box in heliocentric coordinates, defaults to 100x100x100 Mm.
+        :param box_dims: Dimensions of the box in pixels (x, y, z) in the specified units. x and y are in the hpc frame, z is the height above the solar surface.
         :type box_dims: `~astropy.units.Quantity`
         :param box_res: Spatial resolution of the box, defaults to 1.4 Mm.
         :type box_res: `~astropy.units.Quantity`
@@ -392,7 +394,7 @@ class GxBox(QMainWindow):
         >>> time = Time('2024-05-09T17:12:00')
         >>> observer = SkyCoord(0 * u.deg, 0 * u.deg, obstime=time, frame='heliographic_carrington')
         >>> box_orig = SkyCoord(450 * u.arcsec, -256 * u.arcsec, obstime=time, observer="earth", frame='helioprojective')
-        >>> box_dims = u.Quantity([100, 100, 100], u.Mm)
+        >>> box_dims = u.Quantity([100, 100, 100], u.pix)
         >>> box_res = 1.4 * u.Mm
         >>> gxbox = GxBox(time, observer, box_orig, box_dims, box_res)
         >>> gxbox.show()
@@ -401,7 +403,7 @@ class GxBox(QMainWindow):
         super(GxBox, self).__init__()
         self.time = time
         self.observer = observer
-        self.box_dimensions = box_dims
+        self.box_dims = box_dims
         self.box_res = box_res
         self.pad_frac = pad_frac
         ## this is the origin of the box, i.e., the center of the box bottom
@@ -427,18 +429,20 @@ class GxBox(QMainWindow):
         self.map_bottom_im = None
         self.pot_res = None
 
+        box_dimensions =  box_dims / u.pix * box_res
+
         ## this is a dummy map. it should be replaced by a real map from inputs.
         self.instrument_map = self.make_dummy_map(self.box_origin.transform_to(self.frame_obs))
 
         box_center = box_orig.transform_to(self.frame_hcc)
         box_center = SkyCoord(x=box_center.x,
                               y=box_center.y,
-                              z=box_center.z + box_dims[2] / 2,
+                              z=box_center.z + box_dimensions[2] / 2,
                               frame=box_center.frame)
         ## this is the center of the box
         self.box_center = box_center
 
-        self.box = Box(self.frame_obs, self.box_origin, self.box_center, self.box_dimensions, self.box_res)
+        self.box = Box(self.frame_obs, self.box_origin, self.box_center, self.box_dims, self.box_res)
         self.box_bounds = self.box.bounds_coords
         self.bottom_wcs_header = self.box.bottom_cea_header
 
@@ -491,6 +495,7 @@ class GxBox(QMainWindow):
                     self.box.b3d[b3dtype] = gxboxdata['b3d'][b3dtype] if b3dtype in gxboxdata['b3d'].keys() else None
         elif os.path.basename(boxfile).endswith('.h5'):
             self.box.b3d = read_b3d_h5(boxfile)
+        print(self.box.b3d.keys())
 
     @property
     def avaliable_maps(self):
@@ -674,11 +679,72 @@ class GxBox(QMainWindow):
         self.setGeometry(100, 100, int(window_width), int(window_height))
         self.splitter.setSizes([900, 200])
 
+
+    def calc_potential_field(self):
+        import time
+        print(f'Starting potential field computation...')
+        t0 = time.time()
+        if self.mapBottomSelector.currentText() != 'br':
+            self.mapBottomSelector.setCurrentIndex(self.avaliable_maps.index('br'))
+        maglib_lff = MagFieldLinFFF()
+        bnddata = self.map_bottom.data
+        bnddata[np.isnan(bnddata)] = 0.0
+
+        maglib_lff.set_field(bnddata)
+        ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
+        self.pot_res = maglib_lff.lfff_cube(nz=self.box.dims_pix[-1], alpha=0.0)
+        print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
+        self.box.b3d['pot'] = {}
+        self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
+        self.box.b3d['pot']['by'] = self.pot_res['bx'].swapaxes(0, 1)
+        self.box.b3d['pot']['bz'] = self.pot_res['bz'].swapaxes(0, 1)
+
+    def calc_nlfff(self):
+        import time
+        self.box.b3d['nlfff'] = {}
+        if self.box.b3d['pot'] is None:
+            self.calc_potential_field()
+        bx_lff, by_lff, bz_lff = [self.box.b3d['pot'][k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
+        # replace bottom boundary of lff solution with initial boundary conditions
+        bvect_bottom = {}
+        bvect_bottom['bz'] = self.sdomaps['br'] if 'br' in self.sdomaps.keys() else self.loadmap('br')
+        bvect_bottom['bx'] = -self.sdomaps['bt'] if 'bt' in self.sdomaps.keys() else -self.loadmap('bt')
+        bvect_bottom['by'] = self.sdomaps['bp'] if 'bp' in self.sdomaps.keys() else self.loadmap('bp')
+
+        self.bvect_bottom = {}
+        for k in bvect_bottom.keys():
+            self.bvect_bottom[k] = bvect_bottom[k].reproject_to(self.bottom_wcs_header, algorithm="adaptive",
+                                                                roundtrip_coords=False)
+
+        self.bvect_bottom_data = {}
+        for k in bvect_bottom.keys():
+            self.bvect_bottom_data[k] = self.bvect_bottom[k].data
+            self.bvect_bottom_data[k][np.isnan(self.bvect_bottom_data[k])] = 0.0
+        bx_lff[:, :, 0] = self.bvect_bottom_data['bx']
+        by_lff[:, :, 0] = self.bvect_bottom_data['by']
+        bz_lff[:, :, 0] = self.bvect_bottom_data['bz']
+
+        print(f'Starting NLFFF computation...')
+        t0 = time.time()
+        maglib = MagFieldProcessor()
+        if self.pot_res is None:
+            self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
+            self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
+            self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
+        maglib.load_cube_vars(self.pot_res)
+
+        res_nlf = maglib.NLFFF()
+        print(f'Time taken to compute NLFFF solution: {time.time() - t0:.1f} seconds')
+
+        bx_nlff, by_nlff, bz_nlff = [res_nlf[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
+        self.box.b3d['nlfff']['bx'] = bx_nlff
+        self.box.b3d['nlfff']['by'] = by_nlff
+        self.box.b3d['nlfff']['bz'] = bz_nlff
+
     def visualize_3d_magnetic_field(self):
         """
         Launches the MagneticFieldVisualizer to visualize the 3D magnetic field data.
         """
-        import time
 
         box_norm_direction = self.box_norm_direction()
         box_view_up = self.box_view_up()
@@ -686,83 +752,16 @@ class GxBox(QMainWindow):
         # print(f'type of self.box.b3d is {type(self.box.b3d)}')
         # print(f'value of self.box.b3d is {self.box.b3d}')
         # if b3dtype == 'pot':
-        print('##############')
-        print('##############')
-        print('##############')
-        print('##############')
-        print('##############')
         if b3dtype == 'nlfff' and self.box.b3d['nlfff'] is not None:
             print(f'Using existing nlfff solution...')
         else:
             if b3dtype =='pot':
                 if self.box.b3d['pot'] is None:
-                    print(f'Starting potential field computation...')
-                    t0 = time.time()
-                    if self.mapBottomSelector.currentText() != 'br':
-                        self.mapBottomSelector.setCurrentIndex(self.avaliable_maps.index('br'))
-                    maglib_lff = MagFieldLinFFF()
-                    bnddata = self.map_bottom.data
-                    bnddata[np.isnan(bnddata)] = 0.0
-
-                    maglib_lff.set_field(bnddata)
-                    ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
-                    self.pot_res = maglib_lff.lfff_cube(nz = self.box.dims_pix[-1].value, alpha=0.0)
-                    print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
-                    self.box.b3d['pot'] = {}
-                    self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
-                    self.box.b3d['pot']['by'] = self.pot_res['bx'].swapaxes(0, 1)
-                    self.box.b3d['pot']['bz'] = self.pot_res['bz'].swapaxes(0, 1)
+                    self.calc_potential_field()
                 else:
                     print(f'Using existing potential field solution...')
-                    # self.pot_res = {}
-                    # self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
-                    # self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
-                    # self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
             elif b3dtype == 'nlfff':
-                self.box.b3d['nlfff'] = {}
-                # if 'lfff' not in self.box.b3d.keys():
-                #     self.box.b3d['lfff'] = {}
-                bx_lff, by_lff, bz_lff = [self.box.b3d['pot'][k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
-
-                # replace bottom boundary of lff solution with initial boundary conditions
-                bvect_bottom = {}
-                bvect_bottom['bz'] = self.sdomaps['br'] if 'br' in self.sdomaps.keys() else self.loadmap('br')
-                bvect_bottom['bx'] = -self.sdomaps['bt'] if 'bt' in self.sdomaps.keys() else -self.loadmap('bt')
-                bvect_bottom['by'] = self.sdomaps['bp'] if 'bp' in self.sdomaps.keys() else self.loadmap('bp')
-
-                self.bvect_bottom = {}
-                for k in bvect_bottom.keys():
-                    self.bvect_bottom[k] = bvect_bottom[k].reproject_to(self.bottom_wcs_header, algorithm="adaptive",
-                                                                        roundtrip_coords=False)
-
-                self.bvect_bottom_data = {}
-                for k in bvect_bottom.keys():
-                    self.bvect_bottom_data[k] = self.bvect_bottom[k].data
-                    self.bvect_bottom_data[k][np.isnan(self.bvect_bottom_data[k])] = 0.0
-                bx_lff[:, :, 0] = self.bvect_bottom_data['bx']
-                by_lff[:, :, 0] = self.bvect_bottom_data['by']
-                bz_lff[:, :, 0] = self.bvect_bottom_data['bz']
-
-
-                print(f'Starting NLFFF computation...')
-                t0 = time.time()
-                maglib = MagFieldProcessor()
-                if self.pot_res is None:
-                    self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
-                    self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
-                    self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
-                maglib.load_cube_vars(self.pot_res)
-
-                res_nlf = maglib.NLFFF()
-                print(f'Time taken to compute NLFFF solution: {time.time() - t0:.1f} seconds')
-
-                bx_nlff, by_nlff, bz_nlff = [res_nlf[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
-                self.box.b3d['nlfff']['bx'] = bx_nlff
-                self.box.b3d['nlfff']['by'] = by_nlff
-                self.box.b3d['nlfff']['bz'] = bz_nlff
-
-
-
+                self.calc_nlfff()
 
         self.visualizer = MagFieldViewer(self.box, parent=self, box_norm_direction=box_norm_direction,
                                          box_view_up=box_view_up, time=self.time, b3dtype=b3dtype)
@@ -968,8 +967,6 @@ class GxBox(QMainWindow):
             bmin = 0
             bmax = 1000
 
-
-
         # Normalize the magnitude values for colormap
 
         cmap = plt.get_cmap(self.cmapSelector.currentText())
@@ -1129,7 +1126,7 @@ def main():
     # print(f"box_origin.observer: {box_origin.observer}")
     # print(f"observer: {observer}")
 
-    box_dimensions = box_dims / u.pix * box_res
+    # box_dimensions = box_dims / u.pix * box_res
     pad_frac = args.pad_frac
     data_dir = args.data_dir
     gxmodel_dir = args.gxmodel_dir
@@ -1137,15 +1134,14 @@ def main():
 
     # Running the application
     app = QApplication([])
-    gxbox = GxBox(time, observer, box_origin, box_dimensions, box_res, pad_frac=pad_frac, data_dir=data_dir,
+    gxbox = GxBox(time, observer, box_origin, box_dims, box_res, pad_frac=pad_frac, data_dir=data_dir,
                   gxmodel_dir=gxmodel_dir, external_box=external_box)
     gxbox.show()
 
     if args.interactive:
         # Start an interactive IPython session for more advanced debugging and exploration
-        import IPython
-        import matplotlib.pyplot as plt
-        IPython.embed()
+        import pdb
+        pdb.set_trace()
         # # Start the IPython interactive session in a separate thread to avoid blocking the Qt event loop
         # import threading
         # def interactive_shell(gxbox):

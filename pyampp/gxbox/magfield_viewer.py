@@ -307,14 +307,15 @@ class MagFieldViewer(BackgroundPlotter):
                 pickle.dump(serializable_spheres, f)
             print(f"State saved to {filename}")
 
-    def load_state(self):
+    def load_state(self, filename = None):
         """
         Loads the state of spheres from a file. Prompts the user to select a file.
         """
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getOpenFileName(self.app_window, "Load State", f'magfield_viewer_state{self.timestr}.pkl', "Pickle Files (*.pkl)",
-                                                  options=options)
+        if not isinstance(filename, str):
+            options = QFileDialog.Options()
+            options |= QFileDialog.DontUseNativeDialog
+            filename, _ = QFileDialog.getOpenFileName(self.app_window, "Load State", f'magfield_viewer_state{self.timestr}.pkl', "Pickle Files (*.pkl)",
+                                                      options=options)
 
         if filename:
             with open(filename, 'rb') as f:
