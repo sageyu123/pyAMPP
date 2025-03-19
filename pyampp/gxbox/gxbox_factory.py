@@ -1139,52 +1139,11 @@ def main():
     gxbox.show()
 
     if args.interactive:
-        # Start an interactive IPython session for more advanced debugging and exploration
+        # Start an interactive IPython session for more advanced debugging
         import pdb
         pdb.set_trace()
-        # # Start the IPython interactive session in a separate thread to avoid blocking the Qt event loop
-        # import threading
-        # def interactive_shell(gxbox):
-        #     IPython.embed(user_ns={'gxbox': gxbox})
-        #
-        # thread = threading.Thread(target=interactive_shell, args=(gxbox,))
-        # thread.start()
     app.exec_()
 
 
 if __name__ == '__main__':
     main()
-    # import astropy.time
-    # import sunpy.sun.constants
-    # from astropy.coordinates import SkyCoord
-    # from sunpy.coordinates import Heliocentric, Helioprojective, get_earth
-    # import astropy.units as u
-    # from pyampp.gxbox.gxbox_factory import GxBox
-    #
-    # # time = astropy.time.Time('2024-05-09T17:12:00')
-    # # box_origin = SkyCoord(450 * u.arcsec, -256 * u.arcsec, distance,obstime=time, rsun = 696*u.Mm, observer="earth", frame='helioprojective')
-    # # box_dimensions = u.Quantity([200, 200, 200]) * u.Mm
-    #
-    # time = astropy.time.Time('2014-11-01T16:40:00')
-    # distance = sun.earth_distance(time)
-    # box_origin = SkyCoord(lon=30 * u.deg, lat=20 * u.deg,
-    #                       obstime=time,
-    #                       radius=696 * u.Mm,
-    #                       frame='heliographic_carrington')
-    # ## dots source
-    # # box_origin = SkyCoord(-475 * u.arcsec, -330 * u.arcsec, distance,obstime=time, rsun = 696*u.Mm, observer="earth", frame='helioprojective')
-    # ## flare AR
-    # box_origin = SkyCoord(-632 * u.arcsec, -135 * u.arcsec, obstime=time, rsun=696 * u.Mm, observer="earth",
-    #                       frame='helioprojective')
-    # box_dimensions = u.Quantity([150, 150, 100]) * u.Mm
-    #
-    # box_res = 0.6 * u.Mm
-    # box_res = 1.4 * u.Mm
-    # # box_dimensions = u.Quantity([128, 128, 128]) * u.Mm * 1.4
-    # box_dimensions = u.Quantity([64, 64, 64]) * u.Mm * 1.4
-    # observer = get_earth(time)
-    #
-    # app = QApplication(sys.argv)
-    # gxbox = GxBox(time, observer, box_origin, box_dimensions, box_res)
-    # gxbox.show()
-    # sys.exit(app.exec_())
