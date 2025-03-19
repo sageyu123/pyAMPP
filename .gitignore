@@ -1,0 +1,9 @@
+.ipynb_checkpoints
+__pycache__
+*.pyc
+*.pyd
+*.pyo
+*.fits
+*.h5
+build/
+*.egg-info*
