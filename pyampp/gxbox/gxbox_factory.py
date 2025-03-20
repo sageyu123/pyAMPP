@@ -701,6 +701,9 @@ class GxBox(QMainWindow):
 
     def calc_nlfff(self):
         import time
+        from pyampp.util.compute import cutout2box
+        from pyampp.gx_chromo.combo_model import combo_model
+
         self.box.b3d['nlfff'] = {}
         if self.box.b3d['pot'] is None:
             self.calc_potential_field()
@@ -740,6 +743,34 @@ class GxBox(QMainWindow):
         self.box.b3d['nlfff']['bx'] = bx_nlff
         self.box.b3d['nlfff']['by'] = by_nlff
         self.box.b3d['nlfff']['bz'] = bz_nlff
+
+        ## TODO -------------------
+        print("Calculating field lines")
+        lines = maglib.lines(seeds=None)
+
+        base_bz = self.loadmap("magnetogram")
+        base_ic = self.loadmap("continuum")
+
+        header_field = self.sdomaps["field"].wcs.to_header()
+        field_frame = self.bvect_bottom_data['bx'].center.heliographic_carrington.frame
+        lon, lat = field_frame.lon.value, field_frame.lat.value
+
+        obs_time = self.box._frame_obs.obstime
+        dsun_obs = header_field["DSUN_OBS"]
+        header = {"lon": lon, "lat": lat, "dsun_obs": dsun_obs, "obs_time": str(obs_time.iso)}
+
+        obs_dr = self.box._res.to(u.km) / (696000 * u.km)
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+
+        chromo_box = combo_model(box, dr3, base_bz.data.T, base_ic.data.T)
+        chromo_box["avfield"] = lines["av_field"].transpose((1, 2, 0))
+        chromo_box["physlength"] = lines["phys_length"].transpose((1, 2, 0)) * dr3[0]
+        chromo_box["status"] = lines["voxel_status"].transpose((1, 2, 0))
+        self.box.b3d["chromo"] = chromo_box
+
+    def calc_chromo_model(self):
+        pass
+
 
     def visualize_3d_magnetic_field(self):
         """
