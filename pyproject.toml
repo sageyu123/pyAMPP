@@ -16,19 +16,22 @@ requires-python = ">=3.10"
 license = { file = "licenses/LICENSE.rst", content-type = "text/plain" }
 dependencies = ["sunpy[all]",
     "numpy>=1.25,<2",
-    "cython",
     "ipympl",
     "ipywidgets",
     "matplotlib",
     "pyvista",
     "pyvistaqt",
     "pyqt5",
-    "QtPy",
-    "qtrangeslider",
     "scipy",
-    "pyAMaFiL"
+    "pyAMaFiL",
+    "fire"
 ]
 dynamic = ["version"]
+
+
+[project.scripts]
+pyampp = "pyampp.gxbox.gxampp:main"
+gxbox_factory = "pyampp.gxbox.gxbox_factory:main"
 
 [project.optional-dependencies]
 tests = [

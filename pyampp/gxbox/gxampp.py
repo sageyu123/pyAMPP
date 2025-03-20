@@ -12,13 +12,13 @@ from PyQt5 import uic
 from pyampp.util.config import *
 import pyampp
 from pathlib import Path
-import argparse
 from pyampp.gxbox.boxutils import validate_number
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.time import Time
 from sunpy.coordinates import get_earth, HeliographicStonyhurst, HeliographicCarrington, Helioprojective
 import numpy as np
+import fire
 
 base_dir = Path(pyampp.__file__).parent
 
@@ -529,17 +529,18 @@ class PyAmppGUI(QMainWindow):
         import astropy.time
         import astropy.units as u
 
-        command = ['python', os.path.join(base_dir, 'gxbox', 'gxbox_factory.py')]
+        command = ['gxbox_factory']
         time = astropy.time.Time(self.model_time_edit.dateTime().toPyDateTime())
         command += ['--time', time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S')]
+        coord_text = f"({self.coord_x_edit.text()},{self.coord_y_edit.text()})"
         if self.hpc_radio_button.isChecked():
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hpc']
+            command += ['--coords', coord_text, '--hpc']
         elif self.hgc_radio_button.isChecked():
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hgc']
+            command += ['--coords', coord_text, '--hgc']
         else:
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hgs']
+            command += ['--coords', coord_text, '--hgs']
 
-        command += ['--box_dims', self.grid_x_edit.text(), self.grid_y_edit.text(), self.grid_z_edit.text()]
+        command += ['--box_dims', f"({",".join(c.text() for c in (self.grid_x_edit, self.grid_y_edit, self.grid_z_edit))})"]
         command += ['--box_res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
         command += ['--pad_frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
         command += ['--data_dir', self.sdo_data_edit.text()]
@@ -579,31 +580,15 @@ class PyAmppGUI(QMainWindow):
         # Placeholder for clearing command
         self.status_log_edit.clear()
 
-
-def main():
+def app_init(debug=False):
     """
-    Entry point for the PyAmppGUI application.
+    Initializes the PyAmppGUI application.
 
-    This function initializes the PyQt application, sets up and displays the main GUI window for the Solar Data Model.
-    It pre-configures some of the GUI elements with default values for the model time and coordinates.
-
-    No parameters are taken directly by this function. All configurations are done within the GUI or passed through the
-    global environment.
-
-    Examples
-    --------
-    To run the GUI application, execute the script from the command line in the project directory:
-
-    .. code-block:: bash
-
-        python pyAMPP/pyampp/gxbox/gxampp.py
-
-    This command initializes the PyQt application loop and opens the main window of the PyAmppGUI, where all interactions
-    occur. Default values for date and coordinates are set programmatically before the event loop starts.
+    Parameters
+    ----------
+    debug : bool
+        Enable debug mode with interactive session.
     """
-    parser = argparse.ArgumentParser(description="Run GxBox with specified parameters.")
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode with interactive session.')
-    args = parser.parse_args()
 
     app = QApplication([])
     pyampp = PyAmppGUI()
@@ -612,7 +597,8 @@ def main():
     pyampp.coord_y_edit.setText('-135')
     pyampp.update_coords_center()
     pyampp.update_command_display()
-    if args.debug:
+    
+    if debug:
         # Start an interactive IPython session for debugging
         import IPython
         IPython.embed()
@@ -620,6 +606,8 @@ def main():
         plt.show()
     sys.exit(app.exec_())
 
+def main():
+    fire.Fire(app_init)
 
 if __name__ == '__main__':
     main()

@@ -1,4 +1,4 @@
-import argparse
+import fire
 import itertools
 import locale
 # from pyampp.gxbox.magfield_viewer_dev import MagFieldViewer
@@ -1063,87 +1063,97 @@ class GxBox(QMainWindow):
         pass
 
 
+class GxBoxApp:
+    def __init__(self, time, coords, hpc=False, hgc=False, hgs=False, 
+                 box_dims=(64, 64, 64), box_res=1.4, observer=None, 
+                 pad_frac=0.25, data_dir=None, gxmodel_dir=None, 
+                 external_box=None, interactive=False):
+        """
+        Initializes and runs the GxBox application.
+
+        Parameters
+        ----------
+        time : str
+            Observation time in ISO format, e.g., "2024-05-12T00:00:00".
+        coords : list of float
+            Center coordinates [x, y] in arcsec if HPC or deg if HGC or HGS.
+        hpc : bool
+            Use Helioprojective coordinates (default).
+        hgc : bool
+            Use Heliographic Carrington coordinates.
+        hgs : bool
+            Use Heliographic Stonyhurst coordinates.
+        box_dims : tuple of int
+            Box dimensions in pixels as three integers.
+        box_res : float
+            Box resolution in Mm per pixel.
+        observer : str
+            Observer location, default is Earth.
+        pad_frac : float
+            Fractional padding applied to each side of the box, expressed as a decimal.
+        data_dir : str
+            Directory for storing data.
+        gxmodel_dir : str
+            Directory for storing model outputs.
+        external_box : str
+            Path to external box file (optional).
+        interactive : bool
+            Enable interactive mode with access to memory and additional tools.
+        """
+        self.time = Time(time)
+        self.coords = coords
+        self.hpc = hpc
+        self.hgc = hgc
+        self.hgs = hgs
+        self.box_dims = u.Quantity(box_dims, u.pix)
+        self.box_res = box_res * u.Mm
+        self.observer = self.get_observer(observer)
+        self.pad_frac = pad_frac
+        self.data_dir = data_dir or DOWNLOAD_DIR
+        self.gxmodel_dir = gxmodel_dir or GXMODEL_DIR
+        self.external_box = external_box or os.path.abspath(os.getcwd())
+        self.interactive = interactive
+
+        self.run()
+
+    def get_observer(self, observer):
+        """Get the observer location."""
+        return get_earth(self.time) if not observer else SkyCoord.from_name(observer)
+
+    def get_box_origin(self):
+        """Determine the box origin based on the specified coordinate frame."""
+        if self.hpc:
+            return SkyCoord(self.coords[0] * u.arcsec, self.coords[1] * u.arcsec, obstime=self.time,
+                            observer=self.observer, rsun=696 * u.Mm, frame='helioprojective')
+        elif self.hgc:
+            return SkyCoord(lon=self.coords[0] * u.deg, lat=self.coords[1] * u.deg, obstime=self.time,
+                            radius=696 * u.Mm, observer=self.observer, frame='heliographic_carrington')
+        elif self.hgs:
+            return SkyCoord(lon=self.coords[0] * u.deg, lat=self.coords[1] * u.deg, obstime=self.time,
+                            radius=696 * u.Mm, observer=self.observer, frame='heliographic_stonyhurst')
+        else:
+            raise ValueError("Coordinate frame not specified or unknown. Use --hpc, --hgc or --hgs")
+
+    def run(self):
+        """Run the GxBox application."""
+        box_origin = self.get_box_origin()
+
+        # Running the application
+        app = QApplication([])
+        gxbox = GxBox(self.time, self.observer, box_origin, self.box_dims, self.box_res, 
+                      pad_frac=self.pad_frac, data_dir=self.data_dir,
+                      gxmodel_dir=self.gxmodel_dir, external_box=self.external_box)
+        gxbox.show()
+
+        if self.interactive:
+            # Start an interactive IPython session for more advanced debugging
+            import pdb
+            pdb.set_trace()
+        
+        app.exec_()
+
 def main():
-    """
-    Main function to run the GxBox application.
-
-    This function sets up the argument parser, processes the input arguments, and starts the GxBox application.
-
-    Example
-    -------
-    To run the GxBox application from the command line, use the following command:
-
-    .. code-block:: bash
-
-        python pyAMPP/pyampp/gxboxox_factory.py --time 2014-11-01T16:40:00 --coords -632 -135 --hpc --box_dims 64 64 64 --box_res 1.400 --pad_frac 0.25
-    """
-    ## todo From Viktor: I advice you to switch from argparse to fire library. It can make it easy to create API for classes and functions and change it
-    parser = argparse.ArgumentParser(description="Run GxBox with specified parameters.")
-    parser.add_argument('--time', required=True, help='Observation time in ISO format, e.g., "2024-05-12T00:00:00"')
-    parser.add_argument('--coords', nargs=2, type=float, required=True,
-                        help='Center coordinates [x, y] in arcsec if HPC or deg if HGC or HGS')
-    parser.add_argument('--hpc', action='store_true', help='Use Helioprojective coordinates (default)')
-    parser.add_argument('--hgc', action='store_true', help='Use Heliographic Carrington coordinates')
-    parser.add_argument('--hgs', action='store_true', help='Use Heliographic Stonyhurst coordinates')
-    parser.add_argument('--box_dims', nargs=3, type=int, default=[64, 64, 64],
-                        help='Box dimensions in pixels as three integers')
-    parser.add_argument('--box_res', type=float, default=1.4, help='Box resolution in Mm per pixel')
-    parser.add_argument('--observer', help='Observer location, default is Earth')
-    parser.add_argument('--pad_frac', type=float, default=0.25,
-                        help='Fractional padding applied to each side of the box, expressed as a decimal')
-    parser.add_argument('--data_dir', default=DOWNLOAD_DIR, help='Directory for storing data')
-    parser.add_argument('--gxmodel_dir', default=GXMODEL_DIR, help='Directory for storing model outputs')
-    parser.add_argument('--external_box', default=os.path.abspath(os.getcwd()),
-                        help='Path to external box file (optional)')
-    parser.add_argument('--interactive', action='store_true',
-                        help='Enable interactive mode with access to memory and additional tools.')
-
-    args = parser.parse_args()
-
-    # Processing arguments
-    time = Time(args.time)
-    coords = args.coords
-    box_dims = u.Quantity(args.box_dims, u.pix)
-    box_res = args.box_res * u.Mm
-
-    observer = get_earth(time) if not args.observer else SkyCoord.from_name(args.observer)
-
-    if args.hpc:
-        box_origin = SkyCoord(coords[0] * u.arcsec, coords[1] * u.arcsec, obstime=time, observer=observer,
-                              rsun=696 * u.Mm, frame='helioprojective')
-    elif args.hgc:
-        box_origin = SkyCoord(lon=coords[0] * u.deg, lat=coords[1] * u.deg, obstime=time,
-                              radius=696 * u.Mm, observer=observer,
-                              frame='heliographic_carrington')
-    elif args.hgs:
-        box_origin = SkyCoord(lon=coords[0] * u.deg, lat=coords[1] * u.deg, obstime=time,
-                              radius=696 * u.Mm, observer=observer,
-                              frame='heliographic_stonyhurst')
-    else:
-        raise ValueError("Coordinate frame not specified or unknown.")
-
-    # print(f"box_origin: {box_origin}")
-    # print(f"box_origin.observer: {box_origin.observer}")
-    # print(f"observer: {observer}")
-
-    # box_dimensions = box_dims / u.pix * box_res
-    pad_frac = args.pad_frac
-    data_dir = args.data_dir
-    gxmodel_dir = args.gxmodel_dir
-    external_box = args.external_box
-
-    # Running the application
-    app = QApplication([])
-    gxbox = GxBox(time, observer, box_origin, box_dims, box_res, pad_frac=pad_frac, data_dir=data_dir,
-                  gxmodel_dir=gxmodel_dir, external_box=external_box)
-    gxbox.show()
-
-    if args.interactive:
-        # Start an interactive IPython session for more advanced debugging
-        import pdb
-        pdb.set_trace()
-    app.exec_()
-
+    fire.Fire(GxBoxApp)
 
 if __name__ == '__main__':
     main()
