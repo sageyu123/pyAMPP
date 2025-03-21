@@ -752,7 +752,7 @@ class GxBox(QMainWindow):
         base_ic = self.loadmap("continuum")
 
         header_field = self.sdomaps["field"].wcs.to_header()
-        field_frame = self.bvect_bottom_data['bx'].center.heliographic_carrington.frame
+        field_frame = self.sdomaps["field"].center.heliographic_carrington.frame
         lon, lat = field_frame.lon.value, field_frame.lat.value
 
         obs_time = self.box._frame_obs.obstime
@@ -762,7 +762,7 @@ class GxBox(QMainWindow):
         obs_dr = self.box._res.to(u.km) / (696000 * u.km)
         dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
 
-        chromo_box = combo_model(box, dr3, base_bz.data.T, base_ic.data.T)
+        chromo_box = combo_model(self.box.b3d['nlfff'], dr3, base_bz.data.T, base_ic.data.T)
         chromo_box["avfield"] = lines["av_field"].transpose((1, 2, 0))
         chromo_box["physlength"] = lines["phys_length"].transpose((1, 2, 0)) * dr3[0]
         chromo_box["status"] = lines["voxel_status"].transpose((1, 2, 0))
