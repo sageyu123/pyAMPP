@@ -692,7 +692,7 @@ class GxBox(QMainWindow):
 
         maglib_lff.set_field(bnddata)
         ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
-        self.pot_res = maglib_lff.lfff_cube(nz=self.box.dims_pix[-1], alpha=0.0)
+        self.pot_res = maglib_lff.LFFF_cube(nz=self.box.dims_pix[-1], alpha=0.0)
         print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
         self.box.b3d['pot'] = {}
         self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
@@ -748,8 +748,11 @@ class GxBox(QMainWindow):
         print("Calculating field lines")
         lines = maglib.lines(seeds=None)
 
-        base_bz = self.loadmap("magnetogram")
-        base_ic = self.loadmap("continuum")
+        def reproj(bottom_map):
+            return bottom_map.reproject_to(self.bottom_wcs_header, algorithm="adaptive",
+                                                                roundtrip_coords=False)
+        base_bz = reproj(self.loadmap("magnetogram"))
+        base_ic = reproj(self.loadmap("continuum"))
 
         header_field = self.sdomaps["field"].wcs.to_header()
         field_frame = self.sdomaps["field"].center.heliographic_carrington.frame
@@ -763,9 +766,9 @@ class GxBox(QMainWindow):
         dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
 
         chromo_box = combo_model(self.box.b3d['nlfff'], dr3, base_bz.data.T, base_ic.data.T)
-        chromo_box["avfield"] = lines["av_field"].transpose((1, 2, 0))
-        chromo_box["physlength"] = lines["phys_length"].transpose((1, 2, 0)) * dr3[0]
-        chromo_box["status"] = lines["voxel_status"].transpose((1, 2, 0))
+        chromo_box["avfield"] = lines["av_field"]
+        chromo_box["physlength"] = lines["phys_length"] * dr3[0]
+        chromo_box["status"] = lines["voxel_status"]
         self.box.b3d["chromo"] = chromo_box
 
     def calc_chromo_model(self):

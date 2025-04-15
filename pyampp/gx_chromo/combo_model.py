@@ -22,33 +22,25 @@ def combo_model(box, dr, base_bz, base_ic):
 
     csize = chromo['nh'].shape
 
-    bx = box['by'].transpose((1, 2, 0))
-    by = box['bx'].transpose((1, 2, 0))
-    bz = box['bz'].transpose((1, 2, 0))
+    bx, by, bz = (box[k] for k in ("bx", "by", "bz"))
 
-    dim = bx.shape
-    box_bcube = np.zeros((dim[0], dim[1], dim[2], 3), dtype=np.float32)
+    msize = bx.shape
+    box_bcube = np.zeros((*msize, 3), dtype=np.float32)
     box_bcube[:, :, :, 0] = bx
-    box_bcube[:, :, :, 1] = by
+    box_bcube[:, :, :, 1] = by # TODO: check out if the dimensions are right!
     box_bcube[:, :, :, 2] = bz
 
-    msize = box_bcube.shape[0:3]
-    
-    dx = dr[0]
-    dy = dr[1]
-    dz = np.ones((msize[0], msize[1], msize[2]), dtype=np.float64) * dr[2]
-
-    z = np.zeros((msize[0], msize[1], msize[2]), dtype=np.float64)
+    dz = np.ones(msize, dtype=np.float64) * dr[2]
+    z = np.zeros(msize, dtype=np.float64)
     cumz = np.cumsum(dz, axis=2)
     z[:, :, 1:msize[2]] = cumz[:, :, 0:msize[2]-1]
 
     dh_flat = chromo['dh'].flatten(order="F")
-    bad = (dh_flat == 1)
     chromo_idx = np.where(dh_flat != 1)[0]
     chromo['dh'][chromo['dh'] == 1] = 0
 
     tr_h = np.sum(chromo['dh'], axis=2) / 696000.0
-    
+
     max_tr_h = np.max(tr_h)
 
     corona_base_idx = np.min(np.where(z[0, 0, :] >= max_tr_h)[0])
