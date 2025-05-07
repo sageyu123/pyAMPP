@@ -486,9 +486,9 @@ class PyAmppGUI(QMainWindow):
             self.coord_y_label.setText("lat:")
             if coords_center is None:
                 obstime = Time(self.model_time_edit.dateTime().toPyDateTime())
-                observer = get_earth(obstime)
+                # observer = get_earth(obstime)
                 coords_center = self.coords_center.transform_to(
-                    HeliographicStonyhurst(obstime=obstime, observer=observer))
+                    HeliographicStonyhurst(obstime=obstime))
             self.coord_x_edit.setText(f'{coords_center.lon.to(u.deg).value}')
             self.coord_y_edit.setText(f'{coords_center.lat.to(u.deg).value}')
             self.update_command_display()

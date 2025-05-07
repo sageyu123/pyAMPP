@@ -692,7 +692,7 @@ class GxBox(QMainWindow):
 
         maglib_lff.set_field(bnddata)
         ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
-        self.pot_res = maglib_lff.lfff_cube(nz=self.box.dims_pix[-1], alpha=0.0)
+        self.pot_res = maglib_lff.LFFF_cube(nz=self.box.dims_pix[-1], alpha=0.0)
         print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
         self.box.b3d['pot'] = {}
         self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)

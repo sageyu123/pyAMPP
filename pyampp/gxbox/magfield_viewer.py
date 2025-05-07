@@ -102,7 +102,7 @@ class MagFieldViewer(BackgroundPlotter):
         self.grid_zmin, self.grid_zmax = self.grid_z.min(), self.grid_z.max()
         self.default_sph_cen_x = np.mean(self.grid_x)
         self.default_sph_cen_y = np.mean(self.grid_y)
-        self.default_sph_cen_z = self.grid_zmin + self.grid_z.ptp() * 0.1
+        self.default_sph_cen_z = self.grid_zmin + np.ptp(self.grid_z) * 0.1
 
         # self.init_ui()
         self.init_grid()
@@ -506,7 +506,7 @@ class MagFieldViewer(BackgroundPlotter):
         radius_label.setToolTip(
             f"Enter the radius of the sphere.")
         self.radius_input = QLineEdit(
-            f"{min(self.grid_x.ptp(), self.grid_y.ptp(), self.grid_z.ptp()) * 0.05:.2f}")
+            f"{min(np.ptp(self.grid_x), np.ptp(self.grid_y), np.ptp(self.grid_z)) * 0.05:.2f}")
         self.radius_input.setToolTip(
             f"Enter the radius of the sphere in Mm.")
         self.radius_input.returnPressed.connect(lambda: self._on_radius_input_returnPressed(self.radius_input))
@@ -579,7 +579,7 @@ class MagFieldViewer(BackgroundPlotter):
         # else:
         #     center_x = np.mean(self.grid_x)
         #     center_y = np.mean(self.grid_y)
-        # center_z = self.grid_zmin + self.grid_z.ptp() * 0.1
+        # center_z = self.grid_zmin + np.ptp(self.grid_z) * 0.1
         center_z = float(self.center_z_input.text())
         radius = float(self.radius_input.text())
         n_points = int(self.n_points_input.text())
@@ -926,7 +926,7 @@ class MagFieldViewer(BackgroundPlotter):
                                        self.previous_valid_values[self.center_y_input])
         center_z = self.validate_input(self.center_z_input, 0, self.grid_zmax,
                                        self.previous_valid_values[self.center_z_input])
-        radius = self.validate_input(self.radius_input, 0, min(self.grid_x.ptp(), self.grid_y.ptp(), self.grid_z.ptp()),
+        radius = self.validate_input(self.radius_input, 0, min(np.ptp(self.grid_x), np.ptp(self.grid_y), np.ptp(self.grid_z)),
                                      self.previous_valid_values[self.radius_input])
         n_points = self.validate_input(self.n_points_input, 1, 1000, self.previous_valid_values[self.n_points_input],
                                        to_int=True)
@@ -1238,7 +1238,7 @@ class MagFieldViewer(BackgroundPlotter):
         Updates the plane widget based on the current input parameters.
         """
         if self.plane_actor is not None:
-            origin = self.grid_x.ptp() / 2, self.grid_y.ptp() / 2
+            origin = np.ptp(self.grid_x) / 2, np.ptp(self.grid_y) / 2
             slice_z = float(self.slice_z_input.text())
             self.plane_actor.SetOrigin([origin[0], origin[1], slice_z])
             self.update_plot()
@@ -1252,7 +1252,7 @@ class MagFieldViewer(BackgroundPlotter):
         """
         if plane_visible:
             if self.plane_actor is None:
-                origin = self.grid_x.ptp() / 2, self.grid_y.ptp() / 2
+                origin = np.ptp(self.grid_x) / 2, np.ptp(self.grid_y) / 2
                 slice_z = float(self.slice_z_input.text())
                 self.plane_actor = self.add_plane_widget(self._on_plane_moved, normal='z',
                                                          origin=(origin[0], origin[1], slice_z), bounds=(
