@@ -26,9 +26,14 @@ dependencies = ["sunpy[all]",
     "QtPy",
     "qtrangeslider",
     "scipy",
-    "pyAMaFiL"
+    "pyAMaFiL",
+    "typer",
 ]
 dynamic = ["version"]
+
+[project.scripts]
+pyampp = "pyampp.gxbox.gxampp:app"
+gxbox = "pyampp.gxbox.gxbox_factory:app"
 
 [project.optional-dependencies]
 tests = [
