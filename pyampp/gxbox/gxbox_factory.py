@@ -1,7 +1,5 @@
-import fire
 import itertools
 import locale
-# from pyampp.gxbox.magfield_viewer_dev import MagFieldViewer
 import pickle
 from pathlib import Path
 
@@ -9,7 +7,7 @@ import astropy.units as u
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QComboBox,QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, \
+from PyQt5.QtWidgets import QApplication, QComboBox, QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, \
     QMainWindow, \
     QPushButton, QVBoxLayout, QWidget
 from PyQt5 import uic
@@ -30,10 +28,13 @@ from pyampp.gxbox.boxutils import hmi_b2ptr, hmi_disambig, read_b3d_h5
 from pyampp.gxbox.magfield_viewer import MagFieldViewer
 from pyampp.util.config import *
 
+import typer
+from typing import Tuple, Optional
+
+app = typer.Typer(help="Run GxBox with specified parameters.")
 
 os.environ['OMP_NUM_THREADS'] = '16'  # number of parallel threads
 locale.setlocale(locale.LC_ALL, "C");
-
 
 
 ## todo add chrom mask to the tool
@@ -93,10 +94,10 @@ class Box:
             self._origin = box_origin
             self._center = box_center
         print(f'box_dims: {box_dims}, box_res: {box_res}')
-        self._dims = box_dims/u.pix * box_res
+        self._dims = box_dims / u.pix * box_res
         self._res = box_res
         self._dims_pix = np.int_(box_dims.value)
-        print(f'box_dims_pix: {self._dims_pix}, box_res: {self._res}','_dims:', self._dims)
+        print(f'box_dims_pix: {self._dims_pix}, box_res: {self._res}', '_dims:', self._dims)
         # Generate corner points based on the dimensions
         self.corners = list(itertools.product(self._dims[0] / 2 * [-1, 1],
                                               self._dims[1] / 2 * [-1, 1],
@@ -429,7 +430,7 @@ class GxBox(QMainWindow):
         self.map_bottom_im = None
         self.pot_res = None
 
-        box_dimensions =  box_dims / u.pix * box_res
+        box_dimensions = box_dims / u.pix * box_res
 
         ## this is a dummy map. it should be replaced by a real map from inputs.
         self.instrument_map = self.make_dummy_map(self.box_origin.transform_to(self.frame_obs))
@@ -622,7 +623,7 @@ class GxBox(QMainWindow):
         uic.loadUi(Path(__file__).parent / "UI" / "gxbox.ui", self)
 
         # Matplotlib Figure
-        self.fig = plt.Figure(figsize=(9,6))
+        self.fig = plt.Figure(figsize=(9, 6))
         self.canvas = FigureCanvas(self.fig)
         self.canvasLayout.addWidget(self.canvas)
 
@@ -679,7 +680,6 @@ class GxBox(QMainWindow):
         self.setGeometry(100, 100, int(window_width), int(window_height))
         self.splitter.setSizes([900, 200])
 
-
     def calc_potential_field(self):
         import time
         print(f'Starting potential field computation...')
@@ -692,7 +692,7 @@ class GxBox(QMainWindow):
 
         maglib_lff.set_field(bnddata)
         ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
-        self.pot_res = maglib_lff.lfff_cube(nz=self.box.dims_pix[-1], alpha=0.0)
+        self.pot_res = maglib_lff.LFFF_cube(nz=self.box.dims_pix[-1], alpha=0.0)
         print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
         self.box.b3d['pot'] = {}
         self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
@@ -786,7 +786,7 @@ class GxBox(QMainWindow):
         if b3dtype == 'nlfff' and self.box.b3d['nlfff'] is not None:
             print(f'Using existing nlfff solution...')
         else:
-            if b3dtype =='pot':
+            if b3dtype == 'pot':
                 if self.box.b3d['pot'] is None:
                     self.calc_potential_field()
                 else:
@@ -797,8 +797,6 @@ class GxBox(QMainWindow):
         self.visualizer = MagFieldViewer(self.box, parent=self, box_norm_direction=box_norm_direction,
                                          box_view_up=box_view_up, time=self.time, b3dtype=b3dtype)
         self.visualizer.show()
-
-
 
     def update_bottom_map(self, map_name):
         """
@@ -832,7 +830,7 @@ class GxBox(QMainWindow):
         if map_name in HMI_B_SEGMENTS + HMI_B_PRODUCTS + ['magnetogram', 'continuum']:
             map_context_prev = self.map_context
         self.map_context = self.sdomaps[map_name] if map_name in self.sdomaps.keys() else self.loadmap(map_name)
-        if map_name in HMI_B_SEGMENTS+HMI_B_PRODUCTS + ['magnetogram','continuum']:
+        if map_name in HMI_B_SEGMENTS + HMI_B_PRODUCTS + ['magnetogram', 'continuum']:
             self.map_context = self.map_context.rotate(order=3)
             self.map_context = self.map_context.reproject_to(map_context_prev.wcs)
         # else:
@@ -1028,8 +1026,8 @@ class GxBox(QMainWindow):
                 colors = [cmap(norm(value)) for value in magnitude]  # Colormap for each segment
 
                 if self.bminClipCheckbox.isChecked() or self.bmaxClipCheckbox.isChecked():
-                    bmin=0.0
-                    bmax=5e6 ## an unrealistic large B field value for solar corona
+                    bmin = 0.0
+                    bmax = 5e6  ## an unrealistic large B field value for solar corona
                     if self.bminClipCheckbox.isChecked():
                         bmin = float(self.bminInput.text())
                     if self.bmaxClipCheckbox.isChecked():
@@ -1094,97 +1092,203 @@ class GxBox(QMainWindow):
         pass
 
 
-class GxBoxApp:
-    def __init__(self, time, coords, hpc=False, hgc=False, hgs=False, 
-                 box_dims=(64, 64, 64), box_res=1.4, observer=None, 
-                 pad_frac=0.25, data_dir=None, gxmodel_dir=None, 
-                 external_box=None, interactive=False):
-        """
-        Initializes and runs the GxBox application.
+def _validate_frame(
+        hpc: bool,
+        hgc: bool,
+        hgs: bool,
+        coords: list[float],
+        observation_time: Time,
+        observer_coord: SkyCoord,
+) -> SkyCoord:
+    """
+    Determine the box origin based on which frame flag is set.
+    Exactly one of hpc, hgc, or hgs must be True.
+    """
+    if hpc + hgc + hgs != 1:
+        raise typer.BadParameter("Exactly one coordinate frame must be specified: use either --hpc, --hgc, or --hgs.")
 
-        Parameters
-        ----------
-        time : str
-            Observation time in ISO format, e.g., "2024-05-12T00:00:00".
-        coords : list of float
-            Center coordinates [x, y] in arcsec if HPC or deg if HGC or HGS.
-        hpc : bool
-            Use Helioprojective coordinates (default).
-        hgc : bool
-            Use Heliographic Carrington coordinates.
-        hgs : bool
-            Use Heliographic Stonyhurst coordinates.
-        box_dims : tuple of int
-            Box dimensions in pixels as three integers.
-        box_res : float
-            Box resolution in Mm per pixel.
-        observer : str
-            Observer location, default is Earth.
-        pad_frac : float
-            Fractional padding applied to each side of the box, expressed as a decimal.
-        data_dir : str
-            Directory for storing data.
-        gxmodel_dir : str
-            Directory for storing model outputs.
-        external_box : str
-            Path to external box file (optional).
-        interactive : bool
-            Enable interactive mode with access to memory and additional tools.
-        """
-        self.time = Time(time)
-        self.coords = coords
-        self.hpc = hpc
-        self.hgc = hgc
-        self.hgs = hgs
-        self.box_dims = u.Quantity(box_dims, u.pix)
-        self.box_res = box_res * u.Mm
-        self.observer = self.get_observer(observer)
-        self.pad_frac = pad_frac
-        self.data_dir = data_dir or DOWNLOAD_DIR
-        self.gxmodel_dir = gxmodel_dir or GXMODEL_DIR
-        self.external_box = external_box or os.path.abspath(os.getcwd())
-        self.interactive = interactive
+    rsun = 696 * u.Mm  # Solar radius in Mm
 
-        self.run()
+    if hpc:
+        return SkyCoord(
+            coords[0] * u.arcsec,
+            coords[1] * u.arcsec,
+            obstime=observation_time,
+            observer=observer_coord,
+            rsun=rsun,
+            frame="helioprojective",
+        )
+    elif hgc:
+        return SkyCoord(
+            lon=coords[0] * u.deg,
+            lat=coords[1] * u.deg,
+            obstime=observation_time,
+            radius=rsun,
+            observer=observer_coord,
+            frame="heliographic_carrington",
+        )
+    else:  # hgs
+        return SkyCoord(
+            lon=coords[0] * u.deg,
+            lat=coords[1] * u.deg,
+            obstime=observation_time,
+            radius=rsun,
+            observer=observer_coord,
+            frame="heliographic_stonyhurst",
+        )
 
-    def get_observer(self, observer):
-        """Get the observer location."""
-        return get_earth(self.time) if not observer else SkyCoord.from_name(observer)
 
-    def get_box_origin(self):
-        """Determine the box origin based on the specified coordinate frame."""
-        if self.hpc:
-            return SkyCoord(self.coords[0] * u.arcsec, self.coords[1] * u.arcsec, obstime=self.time,
-                            observer=self.observer, rsun=696 * u.Mm, frame='helioprojective')
-        elif self.hgc:
-            return SkyCoord(lon=self.coords[0] * u.deg, lat=self.coords[1] * u.deg, obstime=self.time,
-                            radius=696 * u.Mm, observer=self.observer, frame='heliographic_carrington')
-        elif self.hgs:
-            return SkyCoord(lon=self.coords[0] * u.deg, lat=self.coords[1] * u.deg, obstime=self.time,
-                            radius=696 * u.Mm, observer=self.observer, frame='heliographic_stonyhurst')
-        else:
-            raise ValueError("Coordinate frame not specified or unknown. Use --hpc, --hgc or --hgs")
+@app.command()
+def main(
+        time: str = typer.Option(
+            ...,
+            "--time",
+            help='Observation time in ISO format, e.g., "2024-05-12T00:00:00".'
+        ),
+        coords: Tuple[float, float] = typer.Option(
+            ...,
+            "--coords",
+            help="Two floats: [x, y] (arcsec if HPC, degrees if HGC or HGS). Example: 0.0 0.0",
+        ),
+        hpc: bool = typer.Option(
+            False,
+            "--hpc",
+            help="Use Helioprojective coordinates."
+        ),
+        hgc: bool = typer.Option(
+            False,
+            "--hgc",
+            help="Use Heliographic Carrington coordinates."
+        ),
+        hgs: bool = typer.Option(
+            False,
+            "--hgs",
+            help="Use Heliographic Stonyhurst coordinates."
+        ),
+        box_dims: Tuple[int, int, int] = typer.Option(
+            (100, 100, 100),
+            "--box-dims",
+            help="Three ints: box dimensions [nx, ny, nz] in pixels. Example: 100 100 100"
+        ),
+        box_res: float = typer.Option(
+            1.4,
+            "--box-res",
+            help="Box resolution in Mm per pixel."
+        ),
+        observer: Optional[str] = typer.Option(
+            "Earth",
+            "--observer",
+            help="Observer location (e.g., 'earth' or a named object)."
+        ),
+        pad_frac: float = typer.Option(
+            0.25,
+            "--pad-frac",
+            help="Fractional padding applied to each side of the box (decimal)."
+        ),
+        data_dir: str = typer.Option(
+            DOWNLOAD_DIR,
+            "--data-dir",
+            help="Directory for storing downloaded data."
+        ),
+        gxmodel_dir: str = typer.Option(
+            GXMODEL_DIR,
+            "--gxmodel-dir",
+            help="Directory for storing model outputs."
+        ),
+        external_box: str = typer.Option(
+            os.path.abspath(os.getcwd()),
+            "--external-box",
+            help="Path to an external box file."
+        ),
+        interactive: bool = typer.Option(
+            False,
+            "--interactive",
+            help="Enable interactive mode (drops into pdb after launching)."
+        ),
+):
+    """
+    Launch the GxBox application with the specified parameters.
 
-    def run(self):
-        """Run the GxBox application."""
-        box_origin = self.get_box_origin()
+    :param time: Observation time in ISO format (e.g., "2024-05-12T00:00:00").
+    :type time: str
+    :param coords: Two floats representing [x, y] (arcsec if HPC, degrees if HGC or HGS). Example: 0.0 0.0
+    :type coords: Tuple[float, float]
+    :param hpc: Use Helioprojective coordinates, defaults to False
+    :type hpc: bool, optional
+    :param hgc: Use Heliographic Carrington coordinates, defaults to False
+    :type hgc: bool, optional
+    :param hgs: Use Heliographic Stonyhurst coordinates, defaults to False
+    :type hgs: bool, optional
+    :param box_dims: Three integers [nx, ny, nz] specifying box dimensions in pixels. Example: 100 100 100
+                     Defaults to (100, 100, 100).
+    :type box_dims: Tuple[int, int, int], optional
+    :param box_res: Box resolution in Mm per pixel, defaults to 1.4
+    :type box_res: float, optional
+    :param observer: Observer location (e.g., 'Earth' or a named object), defaults to "Earth"
+    :type observer: str, optional
+    :param pad_frac: Fractional padding applied to each side of the box (decimal), defaults to 0.25
+    :type pad_frac: float, optional
+    :param data_dir: Directory for storing downloaded data, defaults to DOWNLOAD_DIR
+    :type data_dir: str, optional
+    :param gxmodel_dir: Directory for storing model outputs, defaults to GXMODEL_DIR
+    :type gxmodel_dir: str, optional
+    :param external_box: Path to an external box file, defaults to current working directory
+    :type external_box: str, optional
+    :param interactive: Enable interactive mode (drops into pdb after launching), defaults to False
+    :type interactive: bool, optional
+    :raises typer.BadParameter: If none or multiple coordinate frame flags (--hpc, --hgc, --hgs) are provided
+    :return: None
+    :rtype: NoneType
 
-        # Running the application
-        app = QApplication([])
-        gxbox = GxBox(self.time, self.observer, box_origin, self.box_dims, self.box_res, 
-                      pad_frac=self.pad_frac, data_dir=self.data_dir,
-                      gxmodel_dir=self.gxmodel_dir, external_box=self.external_box)
-        gxbox.show()
+    Example:
+    --------
+    .. code-block:: bash
 
-        if self.interactive:
-            # Start an interactive IPython session for more advanced debugging
-            import pdb
-            pdb.set_trace()
-        
-        app.exec_()
+      gxbox \
+        --time "2022-03-30T17:22:37" \
+        --coords 34.44988566346035 14.26110705696788 \
+        --hgs \
+        --box-dims 360 180 200 \
+        --box-res 0.729 \
+        --pad-frac 0.25 \
+        --data-dir /path/to/download_dir \
+        --gxmodel-dir /path/to/gx_models_dir
+    """
 
-def main():
-    fire.Fire(GxBoxApp)
+    observation_time = Time(time)
 
-if __name__ == '__main__':
-    main()
+    # Determine observer location
+    observer_coord = get_earth(observation_time) if observer.lower() == "earth" else SkyCoord.from_name(observer)
+
+    # Validate and compute box origin
+    box_origin = _validate_frame(hpc, hgc, hgs, coords, observation_time, observer_coord)
+
+    # Convert box dimensions and resolution to astropy Quantities
+    dims = u.Quantity(box_dims, u.pix)
+    resolution = box_res * u.Mm
+
+    # Instantiate Qt application and GxBox
+    app_instance = QApplication([])
+    gxbox = GxBox(
+        observation_time,
+        observer_coord,
+        box_origin,
+        dims,
+        resolution,
+        pad_frac=pad_frac,
+        data_dir=data_dir,
+        gxmodel_dir=gxmodel_dir,
+        external_box=external_box,
+    )
+    gxbox.show()
+
+    if interactive:
+        import pdb
+
+        pdb.set_trace()
+
+    app_instance.exec_()
+
+
+if __name__ == "__main__":
+    app()

@@ -18,7 +18,9 @@ import astropy.units as u
 from astropy.time import Time
 from sunpy.coordinates import get_earth, HeliographicStonyhurst, HeliographicCarrington, Helioprojective
 import numpy as np
-import fire
+import typer
+
+app = typer.Typer(help="Launch the PyAmpp application.")
 
 base_dir = Path(pyampp.__file__).parent
 
@@ -486,9 +488,9 @@ class PyAmppGUI(QMainWindow):
             self.coord_y_label.setText("lat:")
             if coords_center is None:
                 obstime = Time(self.model_time_edit.dateTime().toPyDateTime())
-                observer = get_earth(obstime)
+                # observer = get_earth(obstime)
                 coords_center = self.coords_center.transform_to(
-                    HeliographicStonyhurst(obstime=obstime, observer=observer))
+                    HeliographicStonyhurst(obstime=obstime))
             self.coord_x_edit.setText(f'{coords_center.lon.to(u.deg).value}')
             self.coord_y_edit.setText(f'{coords_center.lat.to(u.deg).value}')
             self.update_command_display()
@@ -529,10 +531,10 @@ class PyAmppGUI(QMainWindow):
         import astropy.time
         import astropy.units as u
 
-        command = ['gxbox_factory']
+        command = ['gxbox']
         time = astropy.time.Time(self.model_time_edit.dateTime().toPyDateTime())
-        command += ['--time', time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S')]
-        coord_text = f"({self.coord_x_edit.text()},{self.coord_y_edit.text()})"
+        command += ['--time', '"' + time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S') + '"']
+        coord_text = f"{self.coord_x_edit.text()} {self.coord_y_edit.text()}"
         if self.hpc_radio_button.isChecked():
             command += ['--coords', coord_text, '--hpc']
         elif self.hgc_radio_button.isChecked():
@@ -540,13 +542,13 @@ class PyAmppGUI(QMainWindow):
         else:
             command += ['--coords', coord_text, '--hgs']
 
-        command += ['--box_dims', f"({",".join(c.text() for c in (self.grid_x_edit, self.grid_y_edit, self.grid_z_edit))})"]
-        command += ['--box_res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
-        command += ['--pad_frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
-        command += ['--data_dir', self.sdo_data_edit.text()]
-        command += ['--gxmodel_dir', self.gx_model_edit.text()]
+        command += ['--box-dims', f"{" ".join(c.text() for c in (self.grid_x_edit, self.grid_y_edit, self.grid_z_edit))}"]
+        command += ['--box-res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
+        command += ['--pad-frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
+        command += ['--data-dir', self.sdo_data_edit.text()]
+        command += ['--gxmodel-dir', self.gx_model_edit.text()]
         if self.external_box_edit.text() != '':
-            command += ['--external_box', self.external_box_edit.text()]
+            command += ['--external-box', self.external_box_edit.text()]
         # print(command)
         return command
 
@@ -580,34 +582,53 @@ class PyAmppGUI(QMainWindow):
         # Placeholder for clearing command
         self.status_log_edit.clear()
 
-def app_init(debug=False):
-    """
-    Initializes the PyAmppGUI application.
 
-    Parameters
-    ----------
-    debug : bool
-        Enable debug mode with interactive session.
+@app.command()
+def main(
+        debug: bool = typer.Option(
+            False,
+            "--debug",
+            help="Enable debug mode with an interactive IPython session."
+        )
+):
+    """
+    Entry point for the PyAmppGUI application.
+
+    This function initializes the PyQt application, sets up and displays the main
+    GUI window for the Solar Data Model. It pre-configures some GUI elements with default
+    values for model time and coordinates. Default values are set programmatically
+    before the event loop starts.
+
+    :param debug: Enable debug mode with an interactive IPython session, defaults to False
+    :type debug: bool, optional
+    :raises SystemExit: Exits the application loop when the GUI is closed
+    :return: None
+    :rtype: NoneType
+
+    Examples
+    --------
+    .. code-block:: bash
+
+        gxampp
     """
 
-    app = QApplication([])
+    app_qt = QApplication([])
     pyampp = PyAmppGUI()
-    pyampp.model_time_edit.setDateTime(QDateTime(2014, 11, 1, 16, 40))
-    pyampp.coord_x_edit.setText('-632')
-    pyampp.coord_y_edit.setText('-135')
+    pyampp.model_time_edit.setDateTime(QDateTime(2024, 5, 12, 0, 0))
+    pyampp.coord_x_edit.setText('0')
+    pyampp.coord_y_edit.setText('0')
     pyampp.update_coords_center()
     pyampp.update_command_display()
-    
+
     if debug:
         # Start an interactive IPython session for debugging
         import IPython
         IPython.embed()
+
+        # If any matplotlib plots are created, show them
         import matplotlib.pyplot as plt
         plt.show()
-    sys.exit(app.exec_())
-
-def main():
-    fire.Fire(app_init)
+    sys.exit(app_qt.exec_())
 
 if __name__ == '__main__':
-    main()
+    app()
