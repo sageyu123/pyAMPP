@@ -19,6 +19,9 @@ import astropy.units as u
 from astropy.time import Time
 from sunpy.coordinates import get_earth, HeliographicStonyhurst, HeliographicCarrington, Helioprojective
 import numpy as np
+import typer
+
+app = typer.Typer(help="Launch the PyAmpp application.")
 
 base_dir = Path(pyampp.__file__).parent
 
@@ -486,9 +489,9 @@ class PyAmppGUI(QMainWindow):
             self.coord_y_label.setText("lat:")
             if coords_center is None:
                 obstime = Time(self.model_time_edit.dateTime().toPyDateTime())
-                observer = get_earth(obstime)
+                # observer = get_earth(obstime)
                 coords_center = self.coords_center.transform_to(
-                    HeliographicStonyhurst(obstime=obstime, observer=observer))
+                    HeliographicStonyhurst(obstime=obstime))
             self.coord_x_edit.setText(f'{coords_center.lon.to(u.deg).value}')
             self.coord_y_edit.setText(f'{coords_center.lat.to(u.deg).value}')
             self.update_command_display()
@@ -580,46 +583,52 @@ class PyAmppGUI(QMainWindow):
         self.status_log_edit.clear()
 
 
-def main():
+@app.command()
+def main(
+        debug: bool = typer.Option(
+            False,
+            "--debug",
+            help="Enable debug mode with an interactive IPython session."
+        )
+):
     """
     Entry point for the PyAmppGUI application.
 
-    This function initializes the PyQt application, sets up and displays the main GUI window for the Solar Data Model.
-    It pre-configures some of the GUI elements with default values for the model time and coordinates.
+    This function initializes the PyQt application, sets up and displays the main
+    GUI window for the Solar Data Model. It pre-configures some GUI elements with default
+    values for model time and coordinates. Default values are set programmatically
+    before the event loop starts.
 
-    No parameters are taken directly by this function. All configurations are done within the GUI or passed through the
-    global environment.
+    :param debug: Enable debug mode with an interactive IPython session, defaults to False
+    :type debug: bool, optional
+    :raises SystemExit: Exits the application loop when the GUI is closed
+    :return: None
+    :rtype: NoneType
 
     Examples
     --------
-    To run the GUI application, execute the script from the command line in the project directory:
-
     .. code-block:: bash
 
-        python pyAMPP/pyampp/gxbox/gxampp.py
-
-    This command initializes the PyQt application loop and opens the main window of the PyAmppGUI, where all interactions
-    occur. Default values for date and coordinates are set programmatically before the event loop starts.
+        gxampp
     """
-    parser = argparse.ArgumentParser(description="Run GxBox with specified parameters.")
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode with interactive session.')
-    args = parser.parse_args()
 
-    app = QApplication([])
+    app_qt = QApplication([])
     pyampp = PyAmppGUI()
-    pyampp.model_time_edit.setDateTime(QDateTime(2014, 11, 1, 16, 40))
-    pyampp.coord_x_edit.setText('-632')
-    pyampp.coord_y_edit.setText('-135')
+    pyampp.model_time_edit.setDateTime(QDateTime(2024, 5, 12, 0, 0))
+    pyampp.coord_x_edit.setText('0')
+    pyampp.coord_y_edit.setText('0')
     pyampp.update_coords_center()
     pyampp.update_command_display()
-    if args.debug:
+    if debug:
         # Start an interactive IPython session for debugging
         import IPython
         IPython.embed()
+
+        # If any matplotlib plots are created, show them
         import matplotlib.pyplot as plt
         plt.show()
-    sys.exit(app.exec_())
+    sys.exit(app_qt.exec_())
 
 
 if __name__ == '__main__':
-    main()
+    app()
