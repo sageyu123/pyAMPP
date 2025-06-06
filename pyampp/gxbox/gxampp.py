@@ -607,17 +607,9 @@ def main(
 
     Examples
     --------
-    To run the GUI application:
-
     .. code-block:: bash
 
         gxampp
-
-    To run the GUI in debug mode:
-
-    .. code-block:: bash
-
-        gxampp --debug
     """
 
     app_qt = QApplication([])

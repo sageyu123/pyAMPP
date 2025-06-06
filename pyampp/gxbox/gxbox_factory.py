@@ -1211,8 +1211,10 @@ def main(
     :rtype: NoneType
 
     Example:
+    --------
+    .. code-block:: bash
 
-      gxbox_factory \
+      gxbox \
         --time "2022-03-30T17:22:37" \
         --coords 34.44988566346035 14.26110705696788 \
         --hgs \
@@ -1220,8 +1222,7 @@ def main(
         --box-res 0.729 \
         --pad-frac 0.25 \
         --data-dir /path/to/download_dir \
-        --gxmodel-dir /path/to/gx_models_dir \
-        --external-box /path/to/hmi.sharp_cea_720s.8088.20220330_172400_TAI.Br.gxbox
+        --gxmodel-dir /path/to/gx_models_dir
     """
 
     observation_time = Time(time)
