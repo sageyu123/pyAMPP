@@ -1,4 +1,3 @@
-# import argparse
 import itertools
 import locale
 import pickle
@@ -702,6 +701,9 @@ class GxBox(QMainWindow):
 
     def calc_nlfff(self):
         import time
+        from pyampp.util.compute import cutout2box
+        from pyampp.gx_chromo.combo_model import combo_model
+
         self.box.b3d['nlfff'] = {}
         if self.box.b3d['pot'] is None:
             self.calc_potential_field()
@@ -741,6 +743,37 @@ class GxBox(QMainWindow):
         self.box.b3d['nlfff']['bx'] = bx_nlff
         self.box.b3d['nlfff']['by'] = by_nlff
         self.box.b3d['nlfff']['bz'] = bz_nlff
+
+        ## TODO -------------------
+        print("Calculating field lines")
+        lines = maglib.lines(seeds=None)
+
+        def reproj(bottom_map):
+            return bottom_map.reproject_to(self.bottom_wcs_header, algorithm="adaptive",
+                                                                roundtrip_coords=False)
+        base_bz = reproj(self.loadmap("magnetogram"))
+        base_ic = reproj(self.loadmap("continuum"))
+
+        header_field = self.sdomaps["field"].wcs.to_header()
+        field_frame = self.sdomaps["field"].center.heliographic_carrington.frame
+        lon, lat = field_frame.lon.value, field_frame.lat.value
+
+        obs_time = self.box._frame_obs.obstime
+        dsun_obs = header_field["DSUN_OBS"]
+        header = {"lon": lon, "lat": lat, "dsun_obs": dsun_obs, "obs_time": str(obs_time.iso)}
+
+        obs_dr = self.box._res.to(u.km) / (696000 * u.km)
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+
+        chromo_box = combo_model(self.box.b3d['nlfff'], dr3, base_bz.data.T, base_ic.data.T)
+        chromo_box["avfield"] = lines["av_field"]
+        chromo_box["physlength"] = lines["phys_length"] * dr3[0]
+        chromo_box["status"] = lines["voxel_status"]
+        self.box.b3d["chromo"] = chromo_box
+
+    def calc_chromo_model(self):
+        pass
+
 
     def visualize_3d_magnetic_field(self):
         """

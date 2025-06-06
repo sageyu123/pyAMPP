@@ -9,3 +9,4 @@ global-exclude *.pyc *.o
 # This subpackage is only used in development checkouts
 # and should not be included in built tarballs
 prune pyampp/_dev
+include pyampp/gx_chromo/sav_precomputed/*.sav

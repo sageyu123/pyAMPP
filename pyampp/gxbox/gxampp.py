@@ -12,7 +12,6 @@ from PyQt5 import uic
 from pyampp.util.config import *
 import pyampp
 from pathlib import Path
-import argparse
 from pyampp.gxbox.boxutils import validate_number
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -532,23 +531,24 @@ class PyAmppGUI(QMainWindow):
         import astropy.time
         import astropy.units as u
 
-        command = ['python', os.path.join(base_dir, 'gxbox', 'gxbox_factory.py')]
+        command = ['gxbox']
         time = astropy.time.Time(self.model_time_edit.dateTime().toPyDateTime())
         command += ['--time', time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S')]
+        command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text()]
         if self.hpc_radio_button.isChecked():
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hpc']
+            command += ['--hpc']
         elif self.hgc_radio_button.isChecked():
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hgc']
+            command += ['--hgc']
         else:
-            command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text(), '--hgs']
+            command += ['--hgs']
 
-        command += ['--box_dims', self.grid_x_edit.text(), self.grid_y_edit.text(), self.grid_z_edit.text()]
-        command += ['--box_res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
-        command += ['--pad_frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
-        command += ['--data_dir', self.sdo_data_edit.text()]
-        command += ['--gxmodel_dir', self.gx_model_edit.text()]
+        command += ['--box-dims', self.grid_x_edit.text(), self.grid_y_edit.text(), self.grid_z_edit.text()]
+        command += ['--box-res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
+        command += ['--pad-frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
+        command += ['--data-dir', self.sdo_data_edit.text()]
+        command += ['--gxmodel-dir', self.gx_model_edit.text()]
         if self.external_box_edit.text() != '':
-            command += ['--external_box', self.external_box_edit.text()]
+            command += ['--external-box', self.external_box_edit.text()]
         # print(command)
         return command
 
@@ -619,6 +619,7 @@ def main(
     pyampp.coord_y_edit.setText('0')
     pyampp.update_coords_center()
     pyampp.update_command_display()
+
     if debug:
         # Start an interactive IPython session for debugging
         import IPython
@@ -628,7 +629,6 @@ def main(
         import matplotlib.pyplot as plt
         plt.show()
     sys.exit(app_qt.exec_())
-
 
 if __name__ == '__main__':
     app()

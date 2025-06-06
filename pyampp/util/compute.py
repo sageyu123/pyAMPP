@@ -18,11 +18,7 @@ import locale
 from sunpy.map import all_coordinates_from_map
 import h5py
 
-from pyampp.util.lff import mf_lfff
 # from .gx_chromo.combo_model import combo_model
-from pyAMaFiL.mag_field_wrapper import MagFieldWrapper
-
-maglib = MagFieldWrapper()
 
 os.environ['OMP_NUM_THREADS'] = '16'  # number of parallel threads
 locale.setlocale(locale.LC_ALL, "C");
