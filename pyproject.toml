@@ -4,7 +4,7 @@ requires = [
     "setuptools_scm[toml]>=6.2",
     "wheel",
     "extension-helpers",
-    "numpy>=1.25,<2",
+    "numpy>=1.25",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -15,7 +15,7 @@ readme = "README.rst"
 requires-python = ">=3.10"
 license = { file = "licenses/LICENSE.rst", content-type = "text/plain" }
 dependencies = ["sunpy[all]",
-    "numpy>=1.25,<2",
+    "numpy>=1.25",
     "ipympl",
     "ipywidgets",
     "matplotlib",
@@ -24,14 +24,13 @@ dependencies = ["sunpy[all]",
     "pyqt5",
     "scipy",
     "pyAMaFiL",
-    "fire"
+    "typer",
 ]
 dynamic = ["version"]
 
-
 [project.scripts]
-pyampp = "pyampp.gxbox.gxampp:main"
-gxbox_factory = "pyampp.gxbox.gxbox_factory:main"
+pyampp = "pyampp.gxbox.gxampp:app"
+gxbox = "pyampp.gxbox.gxbox_factory:app"
 
 [project.optional-dependencies]
 tests = [

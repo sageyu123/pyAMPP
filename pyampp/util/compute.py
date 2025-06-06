@@ -158,7 +158,7 @@ def ampp_field(dl_path, out_model, x, y, dx, dy, dz, res):
     maglib_lff = mf_lfff()
     maglib_lff.set_field(box_bz.data.T)
 
-    res1 = maglib_lff.lfff_cube(dz)
+    res1 = maglib_lff.LFFF_cube(dz)
 
     bx_lff, by_lff, bz_lff = [res1[k].transpose((2, 1, 0)) for k in ("bx", "by", "bz")]
 
