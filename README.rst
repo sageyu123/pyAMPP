@@ -4,6 +4,13 @@ pyAMPP: Python Automatic Model Production Pipeline
 **pyAMPP** is a Python implementation of the Automatic Model Production Pipeline (AMPP) for solar coronal modeling.  
 It streamlines the process of generating realistic 3D solar atmosphere models with minimal user input.
 
+
+Documentation
+-------------
+
+Full documentation is available at:
+https://pyampp.readthedocs.io/en/latest/
+
 Overview
 --------
 
