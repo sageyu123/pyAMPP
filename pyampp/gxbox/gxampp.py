@@ -533,16 +533,16 @@ class PyAmppGUI(QMainWindow):
 
         command = ['gxbox']
         time = astropy.time.Time(self.model_time_edit.dateTime().toPyDateTime())
-        command += ['--time', '"' + time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S') + '"']
-        coord_text = f"{self.coord_x_edit.text()} {self.coord_y_edit.text()}"
+        command += ['--time', time.to_datetime().strftime('%Y-%m-%dT%H:%M:%S')]
+        command += ['--coords', self.coord_x_edit.text(), self.coord_y_edit.text()]
         if self.hpc_radio_button.isChecked():
-            command += ['--coords', coord_text, '--hpc']
+            command += ['--hpc']
         elif self.hgc_radio_button.isChecked():
-            command += ['--coords', coord_text, '--hgc']
+            command += ['--hgc']
         else:
-            command += ['--coords', coord_text, '--hgs']
+            command += ['--hgs']
 
-        command += ['--box-dims', f"{" ".join(c.text() for c in (self.grid_x_edit, self.grid_y_edit, self.grid_z_edit))}"]
+        command += ['--box-dims', self.grid_x_edit.text(), self.grid_y_edit.text(), self.grid_z_edit.text()]
         command += ['--box-res', f'{((float(self.res_edit.text()) * u.km).to(u.Mm)).value:.3f}']
         command += ['--pad-frac', f'{float(self.padding_size_edit.text()) / 100:.2f}']
         command += ['--data-dir', self.sdo_data_edit.text()]
