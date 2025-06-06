@@ -48,7 +48,7 @@ Usage Examples
     :align: center
     :width: 600px
 
-**2. Launch the modeling GUI directly (gxbox)**
+**2. Launch the modeling GUI directly (Gxbox Map Viewer)**
 
 .. code-block:: bash
 
@@ -68,7 +68,7 @@ Usage Examples
     :align: center
     :width: 600px
 
-The `gxbox` GUI automatically downloads the required solar data and builds the 3D model based on the user's input. The resulting model can be visualized in a VTK-based viewer that supports interactive exploration of the magnetic field structure.
+The `Gxbox Map Viewer` GUI automatically downloads the required solar data and builds the 3D model based on the user's input. The resulting model can be visualized in a VTK-based viewer (`Gxbox 3D Viewer`) that supports interactive exploration of the magnetic field structure.
 
 Additionally, users can trace and extract magnetic field lines within the 3D model and send them back to the `gxbox` GUI, where they can be overlaid on solar images for contextual visualization.
 
