@@ -358,7 +358,9 @@ class MagFieldViewer(BackgroundPlotter):
         field_lines_control_group = QGroupBox("Field Line Browser")
         field_lines_control_layout = QVBoxLayout()
         field_lines_control_group.setLayout(field_lines_control_layout)
+        field_lines_control_group.setMaximumHeight(200)
         control_layout.addWidget(field_lines_control_group)
+
 
         # Create and add the tree view
         self.tree_view = QTreeView()
@@ -422,7 +424,7 @@ class MagFieldViewer(BackgroundPlotter):
         properties_panel = QWidget()
         properties_layout = QVBoxLayout()
         properties_panel.setLayout(properties_layout)
-
+        properties_panel.setMaximumHeight(200)
         control_layout.addWidget(properties_panel)
 
         # Add widgets to the layout
