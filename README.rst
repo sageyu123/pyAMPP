@@ -28,6 +28,7 @@ Installation
 ------------
 
 pyAMPP can be installed directly from PyPI.
+
 0.  **Setting up a Python 3.10 Environment (Recommended)**
 
 We **strongly recommend** running **pyAMPP** in a dedicated Python 3.10 environment.
