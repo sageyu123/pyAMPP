@@ -745,6 +745,7 @@ class GxBox(QMainWindow):
         self.box.b3d['nlfff']['bz'] = bz_nlff
 
         ## TODO -------------------
+        t1  = time.time()
         print("Calculating field lines")
         lines = maglib.lines(seeds=None)
 
@@ -770,6 +771,7 @@ class GxBox(QMainWindow):
         chromo_box["physlength"] = lines["phys_length"] * dr3[0]
         chromo_box["status"] = lines["voxel_status"]
         self.box.b3d["chromo"] = chromo_box
+        print(f"Time taken to compute chromosphere model: {time.time() - t1:.1f} seconds")
 
     def calc_chromo_model(self):
         pass
