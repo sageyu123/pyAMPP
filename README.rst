@@ -27,11 +27,49 @@ Overview
 Installation
 ------------
 
-Install the latest version from PyPI:
+pyAMPP can be installed directly from PyPI.
+0.  **Setting up a Python 3.10 Environment (Recommended)**
 
-.. code-block:: bash
+We **strongly recommend** running **pyAMPP** in a dedicated Python 3.10 environment.
+You may use any of the following tools to install Python and create an isolated environment:
+ - Miniforge: https://github.com/conda-forge/miniforge
+ - Miniconda: https://www.anaconda.com/docs/getting-started/miniconda/install
+ - Anaconda: https://www.anaconda.com/docs/getting-started/anaconda/install
+ - Conda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
+ - pyenv: https://github.com/pyenv/pyenv?tab=readme-ov-file#installation
 
-    pip install -U pyampp
+Please refer to the official installation instructions for your chosen tool. Their documentation is comprehensive and up to date, so we will not repeat it here.
+
+*You can skip this environment setup section if you already have a suitable Python environment.*
+
+The instructions below use Conda as an example:
+
+1. **Install Conda**
+   If you don’t have Conda yet, follow the instructions for your platform here:
+   https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
+
+2. **Create and activate your environment**
+   Open an Anaconda Prompt or Command Prompt and run:
+
+   .. code-block:: bash
+
+      conda create -n suncast python=3.10
+      conda activate suncast
+
+3. **Upgrade pip and install pyampp**
+
+   .. code-block:: bash
+
+      pip install -U pip setuptools wheel
+      pip install -U pyampp
+
+4. **(Optional) Install additional dependencies**
+
+   For a full scientific Python stack (e.g., SunPy and related tools):
+
+   .. code-block:: bash
+
+      pip install -U sunpy[all]
 
 Main Interfaces
 ---------------
