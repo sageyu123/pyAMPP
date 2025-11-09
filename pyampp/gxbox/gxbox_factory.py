@@ -766,13 +766,12 @@ class GxBox(QMainWindow):
         dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
 
         chromo_box = combo_model(self.box.b3d['nlfff'], dr3, base_bz.data.T, base_ic.data.T)
-        chromo_box["avfield"] = lines["av_field"]
-        chromo_box["physlength"] = lines["phys_length"] * dr3[0]
-        chromo_box["apex_idx"] = lines["apex_idx"]
-        chromo_box["status"] = lines["voxel_status"]
-        chromo_box["startidx"] = lines["start_idx"]
-        chromo_box["endidx"] = lines["end_idx"]
+        for k in ["codes", "apex_idx", "start_idx", "end_idx", "seed_idx",\
+                  "av_field", "phys_length", "voxel_status"]:
+            chromo_box[k] = lines[k]
+        chromo_box["phys_length"] *= dr3[0]
         chromo_box["attrs"] = header
+
         self.box.b3d["chromo"] = chromo_box
         print(f"Time taken to compute chromosphere model: {time.time() - t1:.1f} seconds")
 
