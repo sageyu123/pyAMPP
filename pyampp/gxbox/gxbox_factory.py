@@ -744,7 +744,6 @@ class GxBox(QMainWindow):
         self.box.b3d['nlfff']['by'] = by_nlff
         self.box.b3d['nlfff']['bz'] = bz_nlff
 
-        ## TODO -------------------
         t1  = time.time()
         print("Calculating field lines")
         lines = maglib.lines(seeds=None)
@@ -769,7 +768,11 @@ class GxBox(QMainWindow):
         chromo_box = combo_model(self.box.b3d['nlfff'], dr3, base_bz.data.T, base_ic.data.T)
         chromo_box["avfield"] = lines["av_field"]
         chromo_box["physlength"] = lines["phys_length"] * dr3[0]
+        chromo_box["apex_idx"] = lines["apex_idx"]
         chromo_box["status"] = lines["voxel_status"]
+        chromo_box["startidx"] = lines["start_idx"]
+        chromo_box["endidx"] = lines["end_idx"]
+        chromo_box["attrs"] = header
         self.box.b3d["chromo"] = chromo_box
         print(f"Time taken to compute chromosphere model: {time.time() - t1:.1f} seconds")
 
