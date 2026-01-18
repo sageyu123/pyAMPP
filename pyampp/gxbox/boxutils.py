@@ -242,6 +242,8 @@ def read_b3d_h5(filename):
             box_b3d[model_type] = {}
             for component in group.keys():
                 box_b3d[model_type][component] = group[component][:]
+            if len(group.attrs.keys()) > 0:
+                box_b3d[model_type]["attrs"] = dict(group.attrs)
     return box_b3d
 
 def write_b3d_h5(filename, box_b3d):
@@ -253,6 +255,7 @@ def write_b3d_h5(filename, box_b3d):
     :param box_b3d: dict,
         A dictionary containing the B3D data to be written.
     """
+
     with h5py.File(filename, 'w') as hdf_file:
         for model_type, components in box_b3d.items():
             if components is None:
@@ -260,4 +263,7 @@ def write_b3d_h5(filename, box_b3d):
                 continue
             group = hdf_file.create_group(model_type)
             for component, data in components.items():
-                group.create_dataset(component, data=data)
+                if component == "attrs":
+                    group.attrs.update(data)
+                else:
+                    group.create_dataset(component, data=data)

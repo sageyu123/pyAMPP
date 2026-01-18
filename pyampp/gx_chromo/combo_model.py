@@ -100,5 +100,6 @@ def combo_model(box, dr, base_bz, base_ic):
         'tr': tr_idx,
         'tr_h': tr_h,
         'corona_base': corona_base_idx,
-        'dr': dr
+        'dr': dr,
+        'chromo_mask': chromo_mask
     }
