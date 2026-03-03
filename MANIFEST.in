@@ -10,3 +10,4 @@ global-exclude *.pyc *.o
 # and should not be included in built tarballs
 prune pyampp/_dev
 include pyampp/gx_chromo/sav_precomputed/*.sav
+recursive-include pyampp/gxbox/UI *.ui *.svg
