@@ -8,7 +8,7 @@
 # -- Project information -----------------------------------------------------
 
 # The full version, including alpha/beta/rc tags
-release = "0.1.1.1"
+release = "0.2.0"
 
 project = "pyAMPP"
 copyright = "2022, suncast-org"
@@ -86,8 +86,33 @@ html_sidebars = {
 # -- Options for sphinx.ext.autodoc -------------------------------------------
 autoapi_type = 'python'
 autoapi_dirs = ['../pyampp']
+autoapi_python_use_implicit_namespaces = True
+autoapi_options = [
+    'members',
+    'undoc-members',
+    'show-inheritance',
+    'show-module-summary',
+]
 autoapi_ignore = [
+    # Ignore test and internal helper trees.
     'tests/*',
+    '*/tests/*',
     '_dev/*',
-    'lib/*'
+    '*/_dev/*',
+    'lib/*',
+    '*/lib/*',
+    # Some modules with heavy relative-import assumptions can fail under
+    # AutoAPI static analysis; exclude from API doc generation.
+    'gx_chromo/combo_model.py',
+    '*/gx_chromo/combo_model.py',
+    # Avoid duplicate object descriptions with pyampp.gxbox package exports.
+    'gxbox/gx_box2id.py',
+    '*/gxbox/gx_box2id.py',
+    'gxbox/gx_voxelid.py',
+    '*/gxbox/gx_voxelid.py',
+]
+
+# Keep the docs build signal-to-noise focused on actionable errors.
+suppress_warnings = [
+    'autoapi.python_import_resolution',
 ]

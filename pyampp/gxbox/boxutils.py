@@ -1,8 +1,162 @@
 import numpy as np
 import astropy.units as u
+from astropy.io import fits
+from sunpy.map import Map
+
+def _bilinear_sample(arr: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    x0 = np.floor(x).astype(int)
+    y0 = np.floor(y).astype(int)
+    x1 = x0 + 1
+    y1 = y0 + 1
+
+    x0 = np.clip(x0, 0, arr.shape[0] - 1)
+    x1 = np.clip(x1, 0, arr.shape[0] - 1)
+    y0 = np.clip(y0, 0, arr.shape[1] - 1)
+    y1 = np.clip(y1, 0, arr.shape[1] - 1)
+
+    wx = x - x0
+    wy = y - y0
+
+    f00 = arr[x0, y0]
+    f10 = arr[x1, y0]
+    f01 = arr[x0, y1]
+    f11 = arr[x1, y1]
+
+    return (f00 * (1 - wx) * (1 - wy) +
+            f10 * wx * (1 - wy) +
+            f01 * (1 - wx) * wy +
+            f11 * wx * wy)
+
+
+def _vxv(a: np.ndarray, b: np.ndarray, norm: bool = False) -> np.ndarray:
+    c = np.array([
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ], dtype=float)
+    if norm:
+        n = np.sqrt((c * c).sum())
+        if n > 0:
+            c /= n
+    return c
+
+
+def compute_vertical_current(b0: np.ndarray,
+                             b1: np.ndarray,
+                             b2: np.ndarray,
+                             wcs_header: str,
+                             rsun_arcsec: float,
+                             crpix1: float | None = None,
+                             crpix2: float | None = None,
+                             cdelt1_arcsec: float | None = None,
+                             cdelt2_arcsec: float | None = None) -> np.ndarray:
+    if crpix1 is None or crpix2 is None or cdelt1_arcsec is None or cdelt2_arcsec is None:
+        header = fits.Header.fromstring(wcs_header, sep="\n")
+        cdelt1 = header.get("CDELT1")
+        cdelt2 = header.get("CDELT2")
+        cunit1 = header.get("CUNIT1", "deg")
+        cunit2 = header.get("CUNIT2", "deg")
+        crpix1 = header.get("CRPIX1")
+        crpix2 = header.get("CRPIX2")
+
+        if cdelt1 is None or cdelt2 is None or crpix1 is None or crpix2 is None:
+            raise ValueError("WCS header missing CDELT/CRPIX values.")
+
+        cdelt1_arcsec = (cdelt1 * u.Unit(cunit1)).to_value(u.arcsec)
+        cdelt2_arcsec = (cdelt2 * u.Unit(cunit2)).to_value(u.arcsec)
+
+    jr = np.zeros_like(b0, dtype=float)
+    nx, ny = b0.shape
+
+    delta = 0.5 * cdelt1_arcsec / rsun_arcsec
+
+    for i1 in range(1, nx - 1):
+        for i2 in range(1, ny - 1):
+            x1 = (i1 - crpix1) * cdelt1_arcsec / rsun_arcsec
+            x2 = (i2 - crpix2) * cdelt2_arcsec / rsun_arcsec
+            if np.sqrt(x1 * x1 + x2 * x2) >= 0.95:
+                continue
+            x0 = np.sqrt(1.0 - x1 * x1 - x2 * x2)
+
+            e0 = np.array([x0, x1, x2], dtype=float)
+            e1 = _vxv(np.array([0.0, 0.0, 1.0], dtype=float), e0, norm=True)
+            e2 = _vxv(e0, e1, norm=False)
+
+            x1s = np.array([-e1[1], e1[1], -e2[1], e2[1]]) * delta + x1
+            x2s = np.array([-e1[2], e1[2], -e2[2], e2[2]]) * delta + x2
+
+            xx1 = x1s * rsun_arcsec / cdelt1_arcsec + crpix1
+            xx2 = x2s * rsun_arcsec / cdelt2_arcsec + crpix2
+
+            b0_int = _bilinear_sample(b0, xx1, xx2) * 1e-4
+            b1_int = _bilinear_sample(b1, xx1, xx2) * 1e-4
+            b2_int = _bilinear_sample(b2, xx1, xx2) * 1e-4
+
+            term_e2 = (b0_int[1] * e2[0] + b1_int[1] * e2[1] + b2_int[1] * e2[2]) - \
+                      (b0_int[0] * e2[0] + b1_int[0] * e2[1] + b2_int[0] * e2[2])
+            term_e1 = (b0_int[3] * e1[0] + b1_int[3] * e1[1] + b2_int[3] * e1[2]) - \
+                      (b0_int[2] * e1[0] + b1_int[2] * e1[1] + b2_int[2] * e1[2])
+
+            jr[i1, i2] = (term_e2 - term_e1)
+            jr[i1, i2] /= 2 * (delta * 696e6) * (4 * np.pi * 1e-7)
+
+    return jr
+
+
+def _sanitize_unit_like_header_values(header: fits.Header) -> fits.Header:
+    """
+    Normalize non-standard escaped unit strings found in some IDL-written FITS.
+    Example: 'DN\\/s' -> 'DN/s'.
+    """
+    for key in ("BUNIT", "CUNIT1", "CUNIT2"):
+        if key in header:
+            value = header.get(key)
+            if isinstance(value, str):
+                fixed = value.replace("\\/", "/").replace("\\", "")
+                if fixed != value:
+                    header[key] = fixed
+    return header
+
+
+def _first_image_hdu(hdulist):
+    for hdu in hdulist:
+        if getattr(hdu, "data", None) is not None:
+            return hdu
+    raise ValueError("No image HDU with data found in FITS file.")
+
+
+def load_sunpy_map_compat(path_or_data, header=None):
+    """
+    Load a SunPy map while tolerating IDL-style escaped FITS unit strings.
+
+    If a direct `Map(path)` fails due to unit parsing, this falls back to opening
+    the FITS file, sanitizing unit-like header fields, and building the map from
+    `(data, header)`.
+    """
+    if header is not None:
+        if isinstance(header, fits.Header):
+            safe_header = _sanitize_unit_like_header_values(header.copy())
+        else:
+            safe_header = _sanitize_unit_like_header_values(fits.Header(header))
+        return Map(path_or_data, safe_header)
+
+    try:
+        return Map(path_or_data)
+    except Exception as exc:
+        msg = str(exc)
+        if ("did not parse as unit" not in msg) and ("not a valid unit" not in msg):
+            raise
+
+        with fits.open(path_or_data) as hdul:
+            image_hdu = _first_image_hdu(hdul)
+            data = image_hdu.data
+            safe_header = _sanitize_unit_like_header_values(image_hdu.header.copy())
+        return Map(data, safe_header)
+
+
 from astropy.coordinates import SkyCoord
 from sunpy.coordinates import HeliographicCarrington, HeliographicStonyhurst
-from sunpy.map import all_coordinates_from_map, Map
+from sunpy.map import all_coordinates_from_map
 from PyQt5.QtWidgets import  QMessageBox
 
 import numpy as np
@@ -154,7 +308,10 @@ def validate_number(func):
 
     def wrapper(self, widget, *args, **kwargs):
         try:
-            float(widget.text().strip())
+            if hasattr(widget, "value"):
+                float(widget.value())
+            else:
+                float(widget.text().strip())
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", "Please enter a valid number.")
             return
@@ -177,13 +334,12 @@ def set_QLineEdit_text_pos(line_edit, text):
 
 
 def read_gxsim_b3d_sav(savfile):
-    '''
-    Read the B3D data from the .sav file and save it as a .gxbox file
+    """
+    Read B3D data from a ``.sav`` file and save it as a ``.gxbox`` file.
+
     :param savfile: str,
-        The path to the .sav file.
-
-
-    '''
+        The path to the ``.sav`` file.
+    """
     from scipy.io import readsav
     import pickle
     bdata = readsav(savfile)
@@ -195,10 +351,11 @@ def read_gxsim_b3d_sav(savfile):
     #     gxboxdata = pickle.load(f)
     gxboxdata = {}
     gxboxdata['b3d'] = {}
-    gxboxdata['b3d']['nlfff'] = {}
-    gxboxdata['b3d']['nlfff']['bx'] = bx.swapaxes(0,2)
-    gxboxdata['b3d']['nlfff']['by'] = by.swapaxes(0,2)
-    gxboxdata['b3d']['nlfff']['bz'] = bz.swapaxes(0,2)
+    gxboxdata['b3d']['corona'] = {}
+    gxboxdata['b3d']['corona']['bx'] = bx.swapaxes(0,2)
+    gxboxdata['b3d']['corona']['by'] = by.swapaxes(0,2)
+    gxboxdata['b3d']['corona']['bz'] = bz.swapaxes(0,2)
+    gxboxdata['b3d']['corona']["attrs"] = {"model_type": "nlfff"}
     boxfilenew = savfile.replace('.sav', '.gxbox')
     with open(boxfilenew, 'wb') as f:
         pickle.dump(gxboxdata, f)
@@ -210,9 +367,9 @@ def read_b3d_h5(filename):
     Read B3D data from an HDF5 file and populate a dictionary.
 
     The resulting dictionary will contain keys corresponding to different
-    magnetic field models (e.g., 'pot' for potential fields and 'nlfff' for
-    nonlinear force-free fields), and each model will have sub-keys for
-    the magnetic field components (e.g., 'bx', 'by', 'bz').
+    magnetic field models (e.g., 'corona' for coronal fields and 'chromo' for
+    chromospheric fields), and each model will have sub-keys for the magnetic
+    field components (e.g., 'bx', 'by', 'bz').
 
     :param filename: str,
         The path to the HDF5 file.
@@ -225,25 +382,51 @@ def read_b3d_h5(filename):
 
         b3dbox = read_b3d_h5('path_to_file.h5')
 
-        # Get the potential field components
-        bx_pot = b3dbox['pot']['bx']
-        by_pot = b3dbox['pot']['by']
-        bz_pot = b3dbox['pot']['bz']
-
-        # Get the NLFFF field components
-        bx_nlf = b3dbox['nlfff']['bx']
-        by_nlf = b3dbox['nlfff']['by']
-        bz_nlf = b3dbox['nlfff']['bz']
+        # Get the coronal field components
+        bx_cor = b3dbox['corona']['bx']
+        by_cor = b3dbox['corona']['by']
+        bz_cor = b3dbox['corona']['bz']
     """
     box_b3d = {}
     with h5py.File(filename, 'r') as hdf_file:
         for model_type in hdf_file.keys():
             group = hdf_file[model_type]
-            box_b3d[model_type] = {}
+            target_type = model_type
+            model_attr = None
+            if model_type in ("nlfff", "pot", "potential", "bounds"):
+                target_type = "corona"
+                if model_type == "potential":
+                    model_attr = "pot"
+                elif model_type in ("bounds",):
+                    model_attr = "bnd"
+                else:
+                    model_attr = model_type
+            if target_type not in box_b3d:
+                box_b3d[target_type] = {}
             for component in group.keys():
-                box_b3d[model_type][component] = group[component][:]
-            if len(group.attrs.keys()) > 0:
-                box_b3d[model_type]["attrs"] = dict(group.attrs)
+                ds = group[component]
+                if isinstance(ds, h5py.Group):
+                    sub = {}
+                    for sub_key in ds.keys():
+                        sub_ds = ds[sub_key]
+                        if sub_ds.shape == ():
+                            sub[sub_key] = sub_ds[()]
+                        else:
+                            sub[sub_key] = sub_ds[:]
+                    box_b3d[target_type][component] = sub
+                else:
+                    if ds.shape == ():
+                        box_b3d[target_type][component] = ds[()]
+                    else:
+                        box_b3d[target_type][component] = ds[:]
+            if len(group.attrs.keys()) > 0 or model_attr is not None:
+                attrs = dict(group.attrs)
+                if model_attr is not None and "model_type" not in attrs:
+                    attrs["model_type"] = model_attr
+                if "attrs" in box_b3d[target_type]:
+                    box_b3d[target_type]["attrs"].update(attrs)
+                else:
+                    box_b3d[target_type]["attrs"] = attrs
     return box_b3d
 
 def write_b3d_h5(filename, box_b3d):
@@ -261,9 +444,54 @@ def write_b3d_h5(filename, box_b3d):
             if components is None:
                 print(f"Warning: {model_type} components are None, skipping.")
                 continue
-            group = hdf_file.create_group(model_type)
+            if model_type == "metadata":
+                group = hdf_file.create_group("metadata")
+                for key, value in components.items():
+                    if isinstance(value, str):
+                        group.create_dataset(key, data=np.bytes_(value))
+                    else:
+                        group.create_dataset(key, data=value)
+                continue
+            target_type = model_type
+            attrs = components.get("attrs", {}) if isinstance(components, dict) else {}
+            if model_type in ("nlfff", "pot", "potential", "bounds"):
+                target_type = "corona"
+                if "model_type" not in attrs:
+                    attrs = dict(attrs)
+                    if model_type == "potential":
+                        attrs["model_type"] = "pot"
+                    elif model_type == "bounds":
+                        attrs["model_type"] = "bnd"
+                    else:
+                        attrs["model_type"] = model_type
+            if target_type in hdf_file:
+                # Avoid collisions if multiple legacy groups map to corona
+                continue
+            group = hdf_file.create_group(target_type)
             for component, data in components.items():
                 if component == "attrs":
-                    group.attrs.update(data)
+                    continue
+                if isinstance(data, dict):
+                    sub = group.create_group(component)
+                    for sub_key, sub_val in data.items():
+                        if target_type in ("chromo", "lines") and sub_key == "voxel_status":
+                            sub.create_dataset(sub_key, data=np.asarray(sub_val, dtype=np.uint8))
+                        else:
+                            sub.create_dataset(sub_key, data=sub_val)
                 else:
-                    group.create_dataset(component, data=data)
+                    if target_type in ("chromo", "lines") and component == "voxel_status":
+                        group.create_dataset(component, data=np.asarray(data, dtype=np.uint8))
+                    else:
+                        group.create_dataset(component, data=data)
+            if attrs:
+                group.attrs.update(attrs)
+
+
+# Backward-compatible SFQ exports.
+from pyampp.sfq import get_str_mag as get_str_mag
+from pyampp.sfq import sfq_frame as sfq_frame
+from pyampp.sfq import sfq_step1 as sfq_step1
+from pyampp.sfq import sfq_clean as sfq_clean
+from pyampp.sfq import pex_bl_ as pex_bl_
+from pyampp.sfq import pex_bl as pex_bl
+from pyampp.sfq import pot_vmag as pot_vmag

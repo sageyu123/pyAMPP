@@ -27,7 +27,7 @@ def aia_euv_passbands():
 
 def aia_uv_passbands():
     """ Return the passbands for the SDO/AIA instrument. """
-    return ['1600']
+    return ['1600', '1700']
 
 def hmi_b_segments():
     """ Return the segments for the HMI magnetogram. """
@@ -35,7 +35,7 @@ def hmi_b_segments():
 
 def jsoc_notify_email():
     """ Return the email address for JSOC notifications. """
-    return "suncasa-group@njit.edu"
+    return os.environ.get("PYAMPP_JSOC_NOTIFY_EMAIL", "suncasa-group@njit.edu")
 
 def hmi_b_products():
     """ Return the products for the HMI magnetogram. """

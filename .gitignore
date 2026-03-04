@@ -104,3 +104,10 @@ pyampp/tests/test_magfield_viewer.py
 pyampp/tests/test_MagFieldWrapper.py
 pyampp/tests/test_pyampp.sh
 pyampp/tests/writeup.txt
+build/
+*.egg-info*
+.DS_Store
+.vscode/
+
+# Sphinx build output
+docs/_build/

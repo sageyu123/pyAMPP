@@ -14,21 +14,26 @@ from PyQt5 import uic
 
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
+from astropy.io import fits
 from matplotlib import colormaps as mplcmaps
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from pyAMaFiL.mag_field_proc import MagFieldProcessor
 from pyAMaFiL.mag_field_lin_fff import MagFieldLinFFF
-from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, Helioprojective, get_earth
+from sunpy.coordinates import Heliocentric, HeliographicStonyhurst, HeliographicCarrington, Helioprojective, get_earth
+from sunpy.sun import constants as sun_consts
 from sunpy.map import Map, coordinate_is_on_solar_disk, make_fitswcs_header
 
 import pyampp
 from pyampp.data import downloader
-from pyampp.gxbox.boxutils import hmi_b2ptr, hmi_disambig, read_b3d_h5
+from pyampp.gxbox.box import Box
+from pyampp.gx_chromo.decompose import decompose
+from pyampp.gxbox.boxutils import hmi_b2ptr, hmi_disambig, read_b3d_h5, write_b3d_h5, compute_vertical_current
 from pyampp.gxbox.magfield_viewer import MagFieldViewer
 from pyampp.util.config import *
 
 import typer
+import shlex
 from typing import Tuple, Optional
 
 app = typer.Typer(help="Run GxBox with specified parameters.")
@@ -37,316 +42,89 @@ os.environ['OMP_NUM_THREADS'] = '16'  # number of parallel threads
 locale.setlocale(locale.LC_ALL, "C");
 
 
+def _build_index_header(bottom_wcs_header, source_map: Map) -> str:
+    """
+    Build an IDL-GX compatible INDEX-like FITS header string.
+    """
+    header = fits.Header(bottom_wcs_header).copy()
+
+    ctype1 = str(header.get("CTYPE1", ""))
+    ctype2 = str(header.get("CTYPE2", ""))
+    if ctype1.startswith("HGLN-"):
+        header["CTYPE1"] = "CRLN-" + ctype1.split("-", 1)[1]
+    if ctype2.startswith("HGLT-"):
+        header["CTYPE2"] = "CRLT-" + ctype2.split("-", 1)[1]
+
+    header["SIMPLE"] = int(bool(header.get("SIMPLE", 1)))
+    header["BITPIX"] = int(header.get("BITPIX", 8))
+    header["NAXIS"] = int(header.get("NAXIS", 2))
+
+    if source_map is not None:
+        date_obs = source_map.date.isot if source_map.date is not None else None
+        if date_obs:
+            header["DATE-OBS"] = date_obs
+            header["DATE_OBS"] = date_obs
+            header["DATE"] = date_obs
+        elif "DATE-OBS" in header and "DATE_OBS" not in header:
+            header["DATE_OBS"] = header["DATE-OBS"]
+
+        if hasattr(source_map, "dsun") and source_map.dsun is not None:
+            header["DSUN_OBS"] = float(source_map.dsun.to_value(u.m))
+
+        obs = source_map.observer_coordinate
+        if obs is not None:
+            obs_hgs = obs.transform_to(HeliographicStonyhurst(obstime=source_map.date))
+            header["HGLN_OBS"] = float(obs_hgs.lon.to_value(u.deg))
+            header["HGLT_OBS"] = float(obs_hgs.lat.to_value(u.deg))
+            header["SOLAR_B0"] = float(obs_hgs.lat.to_value(u.deg))
+            try:
+                obs_hgc = obs.transform_to(HeliographicCarrington(observer="earth", obstime=source_map.date))
+                header["CRLN_OBS"] = float(obs_hgc.lon.to_value(u.deg))
+                header["CRLT_OBS"] = float(obs_hgc.lat.to_value(u.deg))
+            except Exception:
+                # Carrington observer transforms can fail for some observer metadata;
+                # keep header generation robust and proceed with available keys.
+                pass
+
+        if getattr(source_map, "rsun_meters", None) is not None:
+            header["RSUN_REF"] = float(source_map.rsun_meters.to_value(u.m))
+
+        tel = source_map.meta.get("telescop")
+        if tel:
+            header["TELESCOP"] = str(tel)
+        instr = source_map.meta.get("instrume")
+        if instr:
+            header["INSTRUME"] = str(instr)
+        if "WCSNAME" not in header:
+            header["WCSNAME"] = "Carrington-Heliographic"
+
+    return header.tostring(sep="\n", endcard=True)
+
+
 ## todo add chrom mask to the tool
-class Box:
-    """
-    Represents a 3D box in solar or observer coordinates defined by its origin, center, dimensions, and resolution.
-
-    This class calculates and stores the coordinates of the box's edges, differentiating between bottom edges and other edges.
-    It is designed to integrate with solar physics data analysis frameworks such as SunPy and Astropy.
-
-    :param frame_obs: The observer's frame of reference as a `SkyCoord` object.
-    :param box_origin: The origin point of the box in the specified coordinate frame as a `SkyCoord`.
-    :param box_center: The geometric center of the box as a `SkyCoord`.
-    :param box_dims: The dimensions of the box specified as an `astropy.units.Quantity` array-like in the order (x, y, z).
-    :param box_res: The resolution of the box, given as an `astropy.units.Quantity` typically in units of megameters.
-
-    Attributes
-    ----------
-    corners : list of tuple
-        List containing tuples representing the corner points of the box in the specified units.
-    edges : list of tuple
-        List containing tuples that represent the edges of the box by connecting the corners.
-    bottom_edges : list of `SkyCoord`
-        A list containing the bottom edges of the box calculated based on the minimum z-coordinate value.
-    non_bottom_edges : list of `SkyCoord`
-        A list containing all edges of the box that are not classified as bottom edges.
-
-    Methods
-    -------
-    bl_tr_coords(pad_frac=0.0)
-        Calculates and returns the bottom left and top right coordinates of the box in the observer frame.
-        Optionally applies a padding factor to expand the box dimensions symmetrically.
-
-    Example
-    -------
-    >>> from astropy.coordinates import SkyCoord
-    >>> from astropy.time import Time
-    >>> import astropy.units as u
-    >>> time = Time('2024-05-09T17:12:00')
-    >>> box_origin = SkyCoord(450 * u.arcsec, -256 * u.arcsec, obstime=time, observer="earth", frame='helioprojective')
-    >>> box_center = SkyCoord(500 * u.arcsec, -200 * u.arcsec, obstime=time, observer="earth", frame='helioprojective')
-    >>> box_dims = u.Quantity([100, 100, 50], u.Mm)
-    >>> box_res = 1.4 * u.Mm
-    >>> box = Box(frame_obs=box_origin.frame, box_origin=box_origin, box_center=box_center, box_dims=box_dims, box_res=box_res)
-    >>> print(box.bounds_coords_bl_tr())
-    """
-
-    def __init__(self, frame_obs, box_origin, box_center, box_dims, box_res):
-        '''
-        Initializes the Box instance with origin, dimensions, and computes the corners and edges.
-
-        :param box_center: SkyCoord, the origin point of the box in a given coordinate frame.
-        :param box_dims: u.Quantity, the dimensions of the box (x, y, z) in pixel units. x and y are in the solar frame, z is the height above the solar surface.
-        '''
-        self._frame_obs = frame_obs
-        with Helioprojective.assume_spherical_screen(frame_obs.observer):
-            self._origin = box_origin
-            self._center = box_center
-        print(f'box_dims: {box_dims}, box_res: {box_res}')
-        self._dims = box_dims / u.pix * box_res
-        self._res = box_res
-        self._dims_pix = np.int_(box_dims.value)
-        print(f'box_dims_pix: {self._dims_pix}, box_res: {self._res}', '_dims:', self._dims)
-        # Generate corner points based on the dimensions
-        self.corners = list(itertools.product(self._dims[0] / 2 * [-1, 1],
-                                              self._dims[1] / 2 * [-1, 1],
-                                              self._dims[2] / 2 * [-1, 1]))
-
-        # Identify edges as pairs of corners differing by exactly one dimension
-        self.edges = [edge for edge in itertools.combinations(self.corners, 2)
-                      if np.count_nonzero(u.Quantity(edge[0]) - u.Quantity(edge[1])) == 1]
-        # Initialize properties to store categorized edges
-        self._bottom_edges = None
-        self._non_bottom_edges = None
-        self._calculate_edge_types()  # Categorize edges upon initialization
-        self.b3dtype = ['pot', 'nlfff']
-        self.b3d = {b3dtype: None for b3dtype in self.b3dtype}
-
-    @property
-    def dims_pix(self):
-        return self._dims_pix
-
-    @property
-    def grid_coords(self):
-        return self._get_grid_coords(self._center)
-
-    def _get_grid_coords(self, grid_center):
-        grid_coords = {}
-        grid_coords['x'] = np.linspace(grid_center.x.to(self._dims.unit) - self._dims[0] / 2,
-                                       grid_center.x.to(self._dims.unit) + self._dims[0] / 2, self._dims_pix[0])
-        grid_coords['y'] = np.linspace(grid_center.y.to(self._dims.unit) - self._dims[1] / 2,
-                                       grid_center.y.to(self._dims.unit) + self._dims[1] / 2, self._dims_pix[1])
-        grid_coords['z'] = np.linspace(grid_center.z.to(self._dims.unit) - self._dims[2] / 2,
-                                       grid_center.z.to(self._dims.unit) + self._dims[2] / 2, self._dims_pix[2])
-        grid_coords['frame'] = self._frame_obs
-        return grid_coords
-
-    def _get_edge_coords(self, edges, box_center):
-        """
-        Translates edge corner points to their corresponding SkyCoord based on the box's origin.
-
-        :param edges: List of tuples, each tuple contains two corner points defining an edge.
-        :type edges: list of tuple
-        :param box_center: The origin point of the box in the specified coordinate frame as a `SkyCoord`.
-        :type box_center: `~astropy.coordinates.SkyCoord`
-        :return: List of `SkyCoord` coordinates of edges in the box's frame.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        return [SkyCoord(x=box_center.x + u.Quantity([edge[0][0], edge[1][0]]),
-                         y=box_center.y + u.Quantity([edge[0][1], edge[1][1]]),
-                         z=box_center.z + u.Quantity([edge[0][2], edge[1][2]]),
-                         frame=box_center.frame) for edge in edges]
-
-    # def _get_bottom_bl_tr_coords(self,box_center):
-    #     return [SkyCoord(x=box_center.x - self._box_dims[0] / 2,
-    def _get_bottom_cea_header(self):
-        """
-        Generates a CEA header for the bottom of the box.
-
-        :return: The FITS WCS header for the bottom of the box.
-        :rtype: dict
-        """
-        origin = self._origin.transform_to(HeliographicStonyhurst)
-        shape = self._dims[:-1][::-1] / self._res.to(self._dims.unit)
-        shape = list(shape.value)
-        shape = [int(np.ceil(s)) for s in shape]
-        rsun = origin.rsun.to(self._res.unit)
-        scale = np.arcsin(self._res / rsun).to(u.deg) / u.pix
-        scale = u.Quantity((scale, scale))
-        # bottom_cea_header = make_fitswcs_header(shape, origin,
-        #                                         scale=scale, observatory=self._origin.observer, projection_code='CEA')
-        bottom_cea_header = make_fitswcs_header(shape, origin,
-                                                scale=scale, projection_code='CEA')
-        # bottom_cea_header['OBSRVTRY'] = str(origin.observer)
-        bottom_cea_header['OBSRVTRY'] = 'None'
-        return bottom_cea_header
-
-    def _calculate_edge_types(self):
-        """
-        Separates the box's edges into bottom edges and non-bottom edges. This is done in a single pass to improve efficiency.
-        """
-        min_z = min(corner[2] for corner in self.corners)
-        bottom_edges, non_bottom_edges = [], []
-        for edge in self.edges:
-            if edge[0][2] == min_z and edge[1][2] == min_z:
-                bottom_edges.append(edge)
-            else:
-                non_bottom_edges.append(edge)
-        self._bottom_edges = self._get_edge_coords(bottom_edges, self._center)
-        self._non_bottom_edges = self._get_edge_coords(non_bottom_edges, self._center)
-
-    def _get_bounds_coords(self, edges, bltr=False, pad_frac=0.0):
-        """
-        Provides the bounding box of the edges in solar x and y.
-
-        :param edges: List of tuples, each tuple contains two corner points defining an edge.
-        :type edges: list of tuple
-        :param bltr: If True, returns bottom left and top right coordinates, otherwise returns minimum and maximum coordinates.
-        :type bltr: bool, optional
-        :param pad_frac: Fractional padding applied to each side of the box, expressed as a decimal, defaults to 0.0.
-        :type pad_frac: float, optional
-
-        :return: Coordinates of the box's bounds.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        xx = []
-        yy = []
-        for edge in edges:
-            xx.append(edge.transform_to(self._frame_obs).Tx)
-            yy.append(edge.transform_to(self._frame_obs).Ty)
-        unit = xx[0][0].unit
-        min_x = np.min(xx)
-        max_x = np.max(xx)
-        min_y = np.min(yy)
-        max_y = np.max(yy)
-        if pad_frac > 0:
-            _pad = pad_frac * np.max([max_x - min_x, max_y - min_y, 20])
-            min_x -= _pad
-            max_x += _pad
-            min_y -= _pad
-            max_y += _pad
-        if bltr:
-            bottom_left = SkyCoord(min_x * unit, min_y * unit, frame=self._frame_obs)
-            top_right = SkyCoord(max_x * unit, max_y * unit, frame=self._frame_obs)
-            return [bottom_left, top_right]
-        else:
-            coords = SkyCoord(Tx=[min_x, max_x] * unit, Ty=[min_y, max_y] * unit,
-                              frame=self._frame_obs)
-            return coords
-
-    def bounds_coords_bl_tr(self, pad_frac=0.0):
-        """
-        Calculates and returns the bottom left and top right coordinates of the box in the observer frame.
-        Optionally applies a padding factor to expand the box dimensions symmetrically.
-
-        :param pad_frac: Fractional padding applied to each side of the box, expressed as a decimal, defaults to 0.0.
-        :type pad_frac: float, optional
-        :return: Bottom left and top right coordinates of the box in the observer frame.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        return self._get_bounds_coords(self.all_edges, bltr=True, pad_frac=pad_frac)
-
-    @property
-    def bounds_coords(self):
-        """
-        Provides access to the box's bounds in the observer frame.
-
-        :return: Coordinates of the box's bounds.
-        :rtype: `~astropy.coordinates.SkyCoord`
-        """
-        return self._get_bounds_coords(self.all_edges)
-
-    @property
-    def bottom_bounds_coords(self):
-        """
-        Provides access to the box's bottom bounds in the observer frame.
-
-        :return: Coordinates of the box's bottom bounds.
-        :rtype: `~astropy.coordinates.SkyCoord`
-        """
-        return self._get_bounds_coords(self.bottom_edges)
-
-    @property
-    def bottom_cea_header(self):
-        """
-        Provides access to the box's bottom WCS CEA header.
-
-        :return: The WCS CEA header for the box's bottom.
-        :rtype: dict
-        """
-        return self._get_bottom_cea_header()
-
-    @property
-    def bottom_edges(self):
-        """
-        Provides access to the box's bottom edge coordinates.
-
-        :return: Coordinates of the box's bottom edges.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        return self._bottom_edges
-
-    @property
-    def non_bottom_edges(self):
-        """
-        Provides access to the box's non-bottom edge coordinates.
-
-        :return: Coordinates of the box's non-bottom edges.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        return self._non_bottom_edges
-
-    @property
-    def all_edges(self):
-        """
-        Provides access to all the edge coordinates of the box, combining both bottom and non-bottom edges.
-
-        :return: Coordinates of all the edges of the box.
-        :rtype: list of `~astropy.coordinates.SkyCoord`
-        """
-        return self._bottom_edges + self._non_bottom_edges
-
-    @property
-    def box_origin(self):
-        """
-        Provides read-only access to the box's origin coordinates.
-
-        :return: The origin of the box in the specified frame.
-        :rtype: `~astropy.coordinates.SkyCoord`
-        """
-        return self._center
-
-    @property
-    def box_dims(self):
-        """
-        Provides read-only access to the box's dimensions.
-
-        :return: The dimensions of the box (length, width, height) in specified units.
-        :rtype: `~astropy.units.Quantity`
-        """
-        return self._dims
-
-    @property
-    def box_view_up(self):
-        """
-        Retrieves an edge from the bottom edges where the x and z coordinates of both points are the same.
-
-        :return: The edge with the same x and z coordinates.
-        :rtype: `~astropy.coordinates.SkyCoord` or None
-        """
-        for edge in self.bottom_edges:
-            if np.allclose(edge.x[0], edge.x[1]) and np.allclose(edge.z[0], edge.z[1]):
-                return edge
-        return None
-
-    @property
-    def box_norm_direction(self):
-        """
-        Retrieves an edge from the bottom edges where the x and z coordinates of both points are the same.
-
-        :return: The edge with the same x and z coordinates.
-        :rtype: `~astropy.coordinates.SkyCoord` or None
-        """
-        for edge in self.non_bottom_edges:
-            if np.allclose(edge.x[0], edge.x[1]) and np.allclose(edge.y[0], edge.y[1]):
-                return edge
-        return None
-
-
 class GxBox(QMainWindow):
     def __init__(self, time, observer, box_orig, box_dims=u.Quantity([100, 100, 100]) * u.pix,
-                 box_res=1.4 * u.Mm, pad_frac=0.25, data_dir=DOWNLOAD_DIR, gxmodel_dir=GXMODEL_DIR, external_box=None):
+                 box_res=1.4 * u.Mm, pad_frac=0.10, data_dir=DOWNLOAD_DIR, gxmodel_dir=GXMODEL_DIR,
+                 external_box=None, execute_cmd: str | None = None,
+                 save_empty_box: bool = False,
+                 save_bounds: bool = False,
+                 save_potential: bool = False,
+                 save_nas: bool = False,
+                 save_gen: bool = False,
+                 save_chr: bool = False,
+                 stop_after: str | None = None,
+                 auto_visualize_last: bool = True,
+                 euv: bool = True,
+                 uv: bool = True,
+                 hmifiles: str | None = None,
+                 entry_box: str | None = None,
+                 empty_box_only: bool = False,
+                 potential_only: bool = False,
+                 use_potential: bool = False,
+                 jump2potential: bool = False,
+                 jump2nlfff: bool = False,
+                 jump2lines: bool = False,
+                 jump2chromo: bool = False):
         """
         Main application window for visualizing and interacting with solar data in a 3D box.
 
@@ -409,6 +187,29 @@ class GxBox(QMainWindow):
         self.pad_frac = pad_frac
         ## this is the origin of the box, i.e., the center of the box bottom
         self.box_origin = box_orig
+        self.gxmodel_dir = gxmodel_dir
+        self.auto_save_stages = True
+        self.execute_cmd = execute_cmd
+        self.save_empty_box = save_empty_box
+        self.save_bounds = save_bounds
+        self.save_potential = save_potential
+        self.save_nas = save_nas
+        self.save_gen = save_gen
+        self.save_chr = save_chr
+        self.stop_after = stop_after
+        self.auto_visualize_last = auto_visualize_last
+        self.euv = euv
+        self.uv = uv
+        self.hmifiles = hmifiles
+        self.entry_box = entry_box
+        self.empty_box_only = empty_box_only
+        self.potential_only = potential_only
+        self.use_potential = use_potential
+        self.jump2potential = jump2potential
+        self.jump2nlfff = jump2nlfff
+        self.jump2lines = jump2lines
+        self.jump2chromo = jump2chromo
+        self._visualizing_last = False
         self.sdofitsfiles = None
         print('observer:', self.box_origin)
         self.frame_hcc = Heliocentric(observer=self.box_origin, obstime=self.time)
@@ -428,6 +229,237 @@ class GxBox(QMainWindow):
         self.fieldlines_show_status = True  # Initial status of the fieldlines visibility
         self.map_context_im = None
         self.map_bottom_im = None
+        self._base_cache = None
+        self._refmaps_cache = None
+
+    def _stage_output_dir(self) -> Path:
+        date_str = self.time.to_datetime().strftime("%Y-%m-%d")
+        out_dir = Path(self.gxmodel_dir) / date_str
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir
+
+    def _format_coord_tag(self) -> str:
+        try:
+            coord = self.box_origin.transform_to(HeliographicCarrington(obstime=self.time))
+            suffix = "CR"
+        except Exception:
+            coord = self.box_origin.transform_to(HeliographicStonyhurst(obstime=self.time))
+            suffix = "HG"
+        lon = coord.lon.to_value(u.deg)
+        lat = coord.lat.to_value(u.deg)
+        lon = (lon + 180.0) % 360.0 - 180.0
+        lon_dir = "W" if lon >= 0 else "E"
+        lat_dir = "N" if lat >= 0 else "S"
+        lon_val = f"{abs(int(round(lon))):02d}"
+        lat_val = f"{abs(int(round(lat))):02d}"
+        return f"{lon_dir}{lon_val}{lat_dir}{lat_val}{suffix}"
+
+    def _stage_file_base(self) -> str:
+        time_tag = self.time.to_datetime().strftime("%Y%m%d_%H%M%S")
+        coord_tag = self._format_coord_tag()
+        return f"hmi.M_720s.{time_tag}.{coord_tag}.CEA"
+
+    def _stage_filename(self, stage_tag: str) -> Path:
+        out_dir = self._stage_output_dir()
+        base = self._stage_file_base()
+        return out_dir / f"{base}.{stage_tag}.h5"
+
+    def _make_gen_chromo(self, chromo_box: dict) -> dict:
+        gen_keys = [
+            "dr",
+            "bcube",
+            "start_idx",
+            "end_idx",
+            "av_field",
+            "phys_length",
+            "voxel_status",
+            "apex_idx",
+            "codes",
+            "seed_idx",
+        ]
+        gen = {k: chromo_box[k] for k in gen_keys if k in chromo_box}
+        if "attrs" in chromo_box:
+            gen["attrs"] = chromo_box["attrs"]
+        return gen
+
+    def _last_stage_tag(self) -> str:
+        if self.stop_after:
+            stop = self.stop_after.lower()
+            if stop in ("none", "empty", "empty_box"):
+                return "NONE"
+            if stop in ("bnd", "bounds"):
+                return "BND"
+            if stop == "pot":
+                return "POT"
+            if stop == "nas":
+                return "NAS"
+            if stop == "gen":
+                return "NAS.GEN"
+            if stop == "chr":
+                return "NAS.CHR"
+        return "NAS.CHR"
+
+    def _should_save_stage(self, stage_tag: str) -> bool:
+        if stage_tag == self._last_stage_tag():
+            return True
+        if stage_tag == "POT":
+            return self.save_potential
+        if stage_tag == "NAS":
+            return self.save_nas
+        if stage_tag == "NAS.GEN":
+            return self.save_gen
+        if stage_tag == "NAS.CHR":
+            return self.save_chr
+        if stage_tag == "NONE":
+            return self.save_empty_box
+        if stage_tag == "BND":
+            return self.save_bounds
+        return False
+
+    def _rsun_km(self) -> u.Quantity:
+        rsun = None
+        if self.map_context is not None:
+            rsun = self.map_context.meta.get("rsun_ref")
+        if rsun is None and self.map_bottom is not None:
+            rsun = self.map_bottom.meta.get("rsun_ref")
+        if rsun is not None:
+            return (rsun * u.m).to(u.km)
+        return sun_consts.radius.to(u.km)
+
+    def _open_last_viewer(self, stage_tag: str) -> None:
+        if self._visualizing_last:
+            return
+        self._visualizing_last = True
+        try:
+            if self.box.b3d.get("corona") is None and self.box.b3d.get("chromo") is None:
+                return
+            if stage_tag == "POT":
+                self.b3dModelSelector.setCurrentText("pot")
+                b3dtype = "pot"
+            elif stage_tag in ("NAS", "NAS.GEN"):
+                self.b3dModelSelector.setCurrentText("nlfff")
+                b3dtype = "nlfff"
+            else:
+                b3dtype = "chromo"
+            box_norm_direction = self.box_norm_direction()
+            box_view_up = self.box_view_up()
+            self.visualizer = MagFieldViewer(self.box, parent=self, box_norm_direction=box_norm_direction,
+                                             box_view_up=box_view_up, time=self.time, b3dtype=b3dtype)
+            self.visualizer.show()
+        finally:
+            self._visualizing_last = False
+
+    def _save_empty_box(self) -> None:
+        obs_dr = self.box_res.to(u.km) / self._rsun_km()
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+        nx, ny, nz = self.box.dims_pix
+        empty = np.zeros((nx, ny, nz), dtype=float)
+        stage_box = {"corona": {"bx": empty, "by": empty, "bz": empty, "dr": np.array(dr3),
+                                "attrs": {"model_type": "none"}}}
+        self._save_stage("NONE", stage_box)
+
+    def _save_bounds(self) -> None:
+        map_bz = self.loadmap("br")
+        map_bx = -self.loadmap("bt")
+        map_by = self.loadmap("bp")
+        map_bz = map_bz.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        map_bx = map_bx.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        map_by = map_by.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        obs_dr = self.box_res.to(u.km) / self._rsun_km()
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+        stage_box = {
+            "bounds": {
+                "bx": map_bx.data,
+                "by": map_by.data,
+                "bz": map_bz.data,
+                "dr": np.array(dr3),
+            }
+        }
+        self._save_stage("BND", stage_box)
+
+    def _get_base_group(self) -> dict:
+        if self._base_cache is not None:
+            return self._base_cache
+        map_bx = -self.loadmap("bt")
+        map_by = self.loadmap("bp")
+        map_bz = self.loadmap("br")
+        map_ic = self.loadmap("continuum")
+        map_bx = map_bx.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        map_by = map_by.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        map_bz = map_bz.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        map_ic = map_ic.reproject_to(self.bottom_wcs_header, algorithm="exact")
+        index = _build_index_header(self.bottom_wcs_header, map_bz)
+        chromo_mask = decompose(map_bz.data.T, map_ic.data.T)
+        self._base_cache = {
+            "bx": map_bx.data,
+            "by": map_by.data,
+            "bz": map_bz.data,
+            "ic": map_ic.data,
+            "chromo_mask": chromo_mask,
+            "index": index,
+        }
+        return self._base_cache
+
+    def _get_refmaps(self) -> dict:
+        if self._refmaps_cache is not None:
+            return self._refmaps_cache
+        refmaps = {}
+
+        def add_refmap(ref_id: str, smap: Map) -> None:
+            # Use WCS header only to avoid non-ASCII FITS meta from some sources.
+            header = smap.wcs.to_header()
+            refmaps[ref_id] = {"data": smap.data, "wcs_header": header.tostring(sep="\n", endcard=True)}
+
+        add_refmap("Bz_reference", self.loadmap("magnetogram"))
+        add_refmap("Ic_reference", self.loadmap("continuum"))
+
+        vert_current_error = None
+        try:
+            map_bx = -self.loadmap("bt")
+            map_by = self.loadmap("bp")
+            map_bz = self.loadmap("br")
+            vc_header = map_bx.wcs.to_header().tostring(sep="\n", endcard=True)
+            rsun_arcsec = self.loadmap("magnetogram").rsun_obs.to_value(u.arcsec)
+            crpix1, crpix2 = map_bx.wcs.wcs.crpix
+            cdelt1 = map_bx.scale.axis1.to_value(u.arcsec / u.pix)
+            cdelt2 = map_bx.scale.axis2.to_value(u.arcsec / u.pix)
+            jz = compute_vertical_current(map_bz.data, map_bx.data, map_by.data,
+                                          vc_header, rsun_arcsec,
+                                          crpix1=crpix1, crpix2=crpix2,
+                                          cdelt1_arcsec=cdelt1, cdelt2_arcsec=cdelt2)
+            refmaps["Vert_current"] = {"data": jz, "wcs_header": vc_header}
+        except Exception as exc:
+            vert_current_error = str(exc)
+
+        for pb in AIA_EUV_PASSBANDS + AIA_UV_PASSBANDS:
+            if pb in self.sdofitsfiles:
+                add_refmap(f"AIA_{pb}", self.loadmap(pb))
+
+        if vert_current_error:
+            refmaps["_vert_current_error"] = {"data": np.array([vert_current_error]),
+                                               "wcs_header": ""}
+        self._refmaps_cache = refmaps
+        return self._refmaps_cache
+
+    def _save_stage(self, stage_tag: str, stage_box: dict):
+        if not self.auto_save_stages:
+            return
+        if not self._should_save_stage(stage_tag):
+            return
+        out_path = self._stage_filename(stage_tag)
+        stage_box = dict(stage_box)
+        if "base" not in stage_box:
+            stage_box["base"] = self._get_base_group()
+        if "refmaps" not in stage_box:
+            stage_box["refmaps"] = self._get_refmaps()
+        stage_id = f"{self._stage_file_base()}.{stage_tag}"
+        if self.execute_cmd:
+            stage_box["metadata"] = {"execute": self.execute_cmd, "id": stage_id}
+        else:
+            stage_box["metadata"] = {"id": stage_id}
+        write_b3d_h5(str(out_path), stage_box)
+        if self.auto_visualize_last and stage_tag == self._last_stage_tag():
+            self._open_last_viewer(stage_tag)
         self.pot_res = None
 
         box_dimensions = box_dims / u.pix * box_res
@@ -453,7 +485,9 @@ class GxBox(QMainWindow):
         if not all([coordinate_is_on_solar_disk(coord) for coord in self.fov_coords]):
             print("Warning: Some of the box corners are not on the solar disk. Please check the box dimensions.")
 
-        download_sdo = downloader.SDOImageDownloader(time, data_dir=data_dir)
+        if self.hmifiles:
+            data_dir = self.hmifiles
+        download_sdo = downloader.SDOImageDownloader(time, data_dir=data_dir, euv=self.euv, uv=self.uv)
         self.sdofitsfiles = download_sdo.download_images()
         self.sdomaps = {}
 
@@ -467,7 +501,28 @@ class GxBox(QMainWindow):
                                                                                algorithm="adaptive",
                                                                                roundtrip_coords=False)
 
+        if self.save_empty_box:
+            self._save_empty_box()
+        if self.save_bounds:
+            self._save_bounds()
+
         self.init_ui()
+
+        if self.entry_box:
+            if os.path.isfile(self.entry_box):
+                self.load_gxbox(self.entry_box)
+            if self.jump2potential:
+                self.stop_after = "pot"
+                self.calc_potential_field()
+            elif self.jump2nlfff:
+                self.stop_after = "nas"
+                self.calc_nlfff()
+            elif self.jump2lines:
+                self.stop_after = "gen"
+                self.calc_nlfff()
+            elif self.jump2chromo:
+                self.stop_after = "chr"
+                self.calc_nlfff()
 
     def box_norm_direction(self):
         cartesian_coords = self.box_origin.transform_to(
@@ -492,10 +547,23 @@ class GxBox(QMainWindow):
         if os.path.basename(boxfile).endswith('.gxbox'):
             with open(boxfile, 'rb') as f:
                 gxboxdata = pickle.load(f)
-                for b3dtype in self.box.b3dtype:
-                    self.box.b3d[b3dtype] = gxboxdata['b3d'][b3dtype] if b3dtype in gxboxdata['b3d'].keys() else None
+                b3d = gxboxdata.get('b3d', {})
+                if "corona" in b3d:
+                    self.box.b3d["corona"] = b3d["corona"]
+                    self.box.corona_type = b3d.get("corona", {}).get("attrs", {}).get("model_type")
+                elif "nlfff" in b3d or "pot" in b3d:
+                    for model_type in ("nlfff", "pot"):
+                        if model_type in b3d:
+                            self.box.corona_models[model_type] = b3d[model_type]
+                            self.box.b3d["corona"] = b3d[model_type]
+                            self.box.corona_type = model_type
+                            break
         elif os.path.basename(boxfile).endswith('.h5'):
             self.box.b3d = read_b3d_h5(boxfile)
+            if "corona" in self.box.b3d:
+                self.box.corona_type = self.box.b3d["corona"].get("attrs", {}).get("model_type")
+                if self.box.corona_type in ("pot", "nlfff"):
+                    self.box.corona_models[self.box.corona_type] = self.box.b3d["corona"]
         print(self.box.b3d.keys())
 
     @property
@@ -694,20 +762,33 @@ class GxBox(QMainWindow):
         ## the axis order in res is y, x, z. so we need to swap the first two axes, so that the order becomes x, y, z.
         self.pot_res = maglib_lff.LFFF_cube(nz=self.box.dims_pix[-1], alpha=0.0)
         print(f'Time taken to compute potential field solution: {time.time() - t0:.1f} seconds')
-        self.box.b3d['pot'] = {}
-        self.box.b3d['pot']['bx'] = self.pot_res['by'].swapaxes(0, 1)
-        self.box.b3d['pot']['by'] = self.pot_res['bx'].swapaxes(0, 1)
-        self.box.b3d['pot']['bz'] = self.pot_res['bz'].swapaxes(0, 1)
+        obs_dr = self.box._res.to(u.km) / self._rsun_km()
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+        pot_box = {
+            "bx": self.pot_res['by'].swapaxes(0, 1),
+            "by": self.pot_res['bx'].swapaxes(0, 1),
+            "bz": self.pot_res['bz'].swapaxes(0, 1),
+            "dr": np.array(dr3),
+            "attrs": {"model_type": "pot"},
+        }
+        self.box.corona_models["pot"] = pot_box
+        self.box.b3d["corona"] = pot_box
+        self.box.corona_type = "pot"
+        self._save_stage("POT", {"corona": pot_box})
+        if self.stop_after and self.stop_after.lower() == "pot":
+            return
 
     def calc_nlfff(self):
         import time
         from pyampp.util.compute import cutout2box
         from pyampp.gx_chromo.combo_model import combo_model
 
-        self.box.b3d['nlfff'] = {}
-        if self.box.b3d['pot'] is None:
+        if "pot" not in self.box.corona_models:
             self.calc_potential_field()
-        bx_lff, by_lff, bz_lff = [self.box.b3d['pot'][k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
+        if self.stop_after and self.stop_after.lower() == "pot":
+            return
+        pot_box = self.box.corona_models["pot"]
+        bx_lff, by_lff, bz_lff = [pot_box[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
         # replace bottom boundary of lff solution with initial boundary conditions
         bvect_bottom = {}
         bvect_bottom['bz'] = self.sdomaps['br'] if 'br' in self.sdomaps.keys() else self.loadmap('br')
@@ -731,18 +812,45 @@ class GxBox(QMainWindow):
         t0 = time.time()
         maglib = MagFieldProcessor()
         if self.pot_res is None:
-            self.pot_res['bx'] = self.box.b3d['pot']['by'].swapaxes(0, 1)
-            self.pot_res['by'] = self.box.b3d['pot']['bx'].swapaxes(0, 1)
-            self.pot_res['bz'] = self.box.b3d['pot']['bz'].swapaxes(0, 1)
+            self.pot_res = {}
+            self.pot_res['bx'] = pot_box['by'].swapaxes(0, 1)
+            self.pot_res['by'] = pot_box['bx'].swapaxes(0, 1)
+            self.pot_res['bz'] = pot_box['bz'].swapaxes(0, 1)
         maglib.load_cube_vars(self.pot_res)
 
-        res_nlf = maglib.NLFFF()
-        print(f'Time taken to compute NLFFF solution: {time.time() - t0:.1f} seconds')
+        if self.use_potential:
+            bx_nlff, by_nlff, bz_nlff = pot_box["bx"], pot_box["by"], pot_box["bz"]
+            obs_dr = self.box._res.to(u.km) / self._rsun_km()
+            dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+            nlfff_box = {
+                "bx": bx_nlff,
+                "by": by_nlff,
+                "bz": bz_nlff,
+                "dr": np.array(dr3),
+                "attrs": {"model_type": "pot"},
+            }
+            self.box.b3d["corona"] = nlfff_box
+            self.box.corona_type = "pot"
+        else:
+            res_nlf = maglib.NLFFF()
+            print(f'Time taken to compute NLFFF solution: {time.time() - t0:.1f} seconds')
 
-        bx_nlff, by_nlff, bz_nlff = [res_nlf[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
-        self.box.b3d['nlfff']['bx'] = bx_nlff
-        self.box.b3d['nlfff']['by'] = by_nlff
-        self.box.b3d['nlfff']['bz'] = bz_nlff
+            bx_nlff, by_nlff, bz_nlff = [res_nlf[k].swapaxes(0, 1) for k in ("by", "bx", "bz")]
+            obs_dr = self.box._res.to(u.km) / self._rsun_km()
+            dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+            nlfff_box = {
+                "bx": bx_nlff,
+                "by": by_nlff,
+                "bz": bz_nlff,
+                "dr": np.array(dr3),
+                "attrs": {"model_type": "nlfff"},
+            }
+            self.box.corona_models["nlfff"] = nlfff_box
+            self.box.b3d["corona"] = nlfff_box
+            self.box.corona_type = "nlfff"
+            self._save_stage("NAS", {"corona": nlfff_box})
+        if self.stop_after and self.stop_after.lower() == "nas":
+            return
 
         # ## TODO -------------------
         # t1  = time.time()
@@ -773,6 +881,37 @@ class GxBox(QMainWindow):
         # import IPython;
         # IPython.embed()
 
+        def reproj(bottom_map):
+            return bottom_map.reproject_to(self.bottom_wcs_header, algorithm="adaptive",
+                                                                roundtrip_coords=False)
+        base_bz = reproj(self.loadmap("magnetogram"))
+        base_ic = reproj(self.loadmap("continuum"))
+
+        header_field = self.sdomaps["field"].wcs.to_header()
+        field_frame = self.sdomaps["field"].center.heliographic_carrington.frame
+        lon, lat = field_frame.lon.value, field_frame.lat.value
+
+        obs_time = self.box._frame_obs.obstime
+        dsun_obs = header_field["DSUN_OBS"]
+        header = {"lon": lon, "lat": lat, "dsun_obs": dsun_obs, "obs_time": str(obs_time.iso)}
+
+        obs_dr = self.box._res.to(u.km) / self._rsun_km()
+        dr3 = [obs_dr.value, obs_dr.value, obs_dr.value]
+
+        chromo_box = combo_model(self.box.b3d['corona'], dr3, base_bz.data.T, base_ic.data.T)
+        for k in ["codes", "apex_idx", "start_idx", "end_idx", "seed_idx",\
+                  "av_field", "phys_length", "voxel_status"]:
+            chromo_box[k] = lines[k]
+        chromo_box["phys_length"] *= dr3[0]
+        chromo_box["attrs"] = header
+        gen_chromo = self._make_gen_chromo(chromo_box)
+        self._save_stage("NAS.GEN", {"chromo": gen_chromo})
+        if self.stop_after and self.stop_after.lower() == "gen":
+            return
+
+        self.box.b3d["chromo"] = chromo_box
+        self._save_stage("NAS.CHR", {"chromo": self.box.b3d["chromo"]})
+        print(f"Time taken to compute chromosphere model: {time.time() - t1:.1f} seconds")
 
     def calc_chromo_model(self):
         pass
@@ -789,14 +928,15 @@ class GxBox(QMainWindow):
         # print(f'type of self.box.b3d is {type(self.box.b3d)}')
         # print(f'value of self.box.b3d is {self.box.b3d}')
         # if b3dtype == 'pot':
-        if b3dtype == 'nlfff' and self.box.b3d['nlfff'] is not None:
-            print(f'Using existing nlfff solution...')
+        if self.box.b3d["corona"] is not None and (self.box.corona_type is None or self.box.corona_type == b3dtype):
+            print(f'Using existing {self.box.corona_type or "corona"} solution...')
+        elif b3dtype in self.box.corona_models:
+            self.box.b3d["corona"] = self.box.corona_models[b3dtype]
+            self.box.corona_type = b3dtype
+            print(f'Using existing {b3dtype} solution...')
         else:
             if b3dtype == 'pot':
-                if self.box.b3d['pot'] is None:
-                    self.calc_potential_field()
-                else:
-                    print(f'Using existing potential field solution...')
+                self.calc_potential_field()
             elif b3dtype == 'nlfff':
                 self.calc_nlfff()
 
@@ -1146,13 +1286,13 @@ def _validate_frame(
 
 @app.command()
 def main(
-        time: str = typer.Option(
-            ...,
+        time: Optional[str] = typer.Option(
+            None,
             "--time",
             help='Observation time in ISO format, e.g., "2024-05-12T00:00:00".'
         ),
-        coords: Tuple[float, float] = typer.Option(
-            ...,
+        coords: Optional[Tuple[float, float]] = typer.Option(
+            None,
             "--coords",
             help="Two floats: [x, y] (arcsec if HPC, degrees if HGC or HGS). Example: 0.0 0.0",
         ),
@@ -1171,12 +1311,12 @@ def main(
             "--hgs",
             help="Use Heliographic Stonyhurst coordinates."
         ),
-        box_dims: Tuple[int, int, int] = typer.Option(
+        box_dims: Optional[Tuple[int, int, int]] = typer.Option(
             (100, 100, 100),
             "--box-dims",
             help="Three ints: box dimensions [nx, ny, nz] in pixels. Example: 100 100 100"
         ),
-        box_res: float = typer.Option(
+        box_res: Optional[float] = typer.Option(
             1.4,
             "--box-res",
             help="Box resolution in Mm per pixel."
@@ -1186,22 +1326,22 @@ def main(
             "--observer",
             help="Observer location (e.g., 'earth' or a named object)."
         ),
-        pad_frac: float = typer.Option(
+        pad_frac: Optional[float] = typer.Option(
             0.25,
             "--pad-frac",
             help="Fractional padding applied to each side of the box (decimal)."
         ),
-        data_dir: str = typer.Option(
+        data_dir: Optional[str] = typer.Option(
             DOWNLOAD_DIR,
             "--data-dir",
             help="Directory for storing downloaded data."
         ),
-        gxmodel_dir: str = typer.Option(
+        gxmodel_dir: Optional[str] = typer.Option(
             GXMODEL_DIR,
             "--gxmodel-dir",
             help="Directory for storing model outputs."
         ),
-        external_box: str = typer.Option(
+        external_box: Optional[str] = typer.Option(
             os.path.abspath(os.getcwd()),
             "--external-box",
             help="Path to an external box file."
@@ -1210,6 +1350,106 @@ def main(
             False,
             "--interactive",
             help="Enable interactive mode (drops into pdb after launching)."
+        ),
+        euv: bool = typer.Option(
+            True,
+            "--euv/--no-euv",
+            help="Download AIA/EUV context maps (default: on)."
+        ),
+        uv: bool = typer.Option(
+            True,
+            "--uv/--no-uv",
+            help="Download AIA/UV context maps (default: on)."
+        ),
+        hmifiles: Optional[str] = typer.Option(
+            None,
+            "--hmifiles",
+            help="Path to a local HMI data directory to bypass downloads."
+        ),
+        entry_box: Optional[str] = typer.Option(
+            None,
+            "--entry-box",
+            help="Path to a preexisting box to use as starting point."
+        ),
+        empty_box_only: bool = typer.Option(
+            False,
+            "--empty-box-only",
+            help="Stop after empty box is generated."
+        ),
+        potential_only: bool = typer.Option(
+            False,
+            "--potential-only",
+            help="Compute only the potential extrapolation and stop."
+        ),
+        use_potential: bool = typer.Option(
+            False,
+            "--use-potential",
+            help="Skip NLFFF and use the potential field for downstream steps."
+        ),
+        jump2potential: bool = typer.Option(
+            False,
+            "--jump2potential",
+            help="Start from entry_box and jump to potential stage."
+        ),
+        jump2nlfff: bool = typer.Option(
+            False,
+            "--jump2nlfff",
+            help="Start from entry_box and jump to NLFFF stage."
+        ),
+        jump2lines: bool = typer.Option(
+            False,
+            "--jump2lines",
+            help="Start from entry_box and jump to lines/GEN stage."
+        ),
+        jump2chromo: bool = typer.Option(
+            False,
+            "--jump2chromo",
+            help="Start from entry_box and jump to chromo stage."
+        ),
+        save_empty_box: bool = typer.Option(
+            False,
+            "--save-empty-box",
+            help="Save the empty box stage (NONE)."
+        ),
+        save_bounds: bool = typer.Option(
+            False,
+            "--save-bounds",
+            help="Save the boundary stage (BND)."
+        ),
+        save_potential: bool = typer.Option(
+            False,
+            "--save-potential",
+            help="Save the potential stage (POT)."
+        ),
+        save_nas: bool = typer.Option(
+            False,
+            "--save-nas",
+            help="Save the NLFFF stage (NAS)."
+        ),
+        save_gen: bool = typer.Option(
+            False,
+            "--save-gen",
+            help="Save the GEN stage (NAS.GEN)."
+        ),
+        save_chr: bool = typer.Option(
+            False,
+            "--save-chr",
+            help="Save the CHR stage (NAS.CHR)."
+        ),
+        stop_after: Optional[str] = typer.Option(
+            None,
+            "--stop-after",
+            help="Stop after stage: pot|nas|gen|chr."
+        ),
+        auto_visualize_last: bool = typer.Option(
+            True,
+            "--auto-visualize-last/--no-auto-visualize-last",
+            help="Auto-launch the 3D viewer for the last stage."
+        ),
+        info: bool = typer.Option(
+            False,
+            "--info",
+            help="Print all explicit and implicit options with their meanings and exit."
         ),
 ):
     """
@@ -1261,6 +1501,150 @@ def main(
         --gxmodel-dir /path/to/gx_models_dir
     """
 
+    def _build_execute_cmd() -> str:
+        parts = [
+            "gxbox",
+            "--time",
+            time or "<MISSING_TIME>",
+            "--coords",
+            str(coords[0]) if coords else "<MISSING_X>",
+            str(coords[1]) if coords else "<MISSING_Y>",
+        ]
+        if hpc:
+            parts.append("--hpc")
+        elif hgc:
+            parts.append("--hgc")
+        elif hgs:
+            parts.append("--hgs")
+        parts += [
+            "--box-dims",
+            str(box_dims[0]) if box_dims else "<MISSING_NX>",
+            str(box_dims[1]) if box_dims else "<MISSING_NY>",
+            str(box_dims[2]) if box_dims else "<MISSING_NZ>",
+            "--box-res",
+            str(box_res) if box_res is not None else "<MISSING_BOX_RES>",
+            "--pad-frac",
+            str(pad_frac) if pad_frac is not None else "<MISSING_PAD_FRAC>",
+            "--data-dir",
+            data_dir or "<MISSING_DATA_DIR>",
+            "--gxmodel-dir",
+            gxmodel_dir or "<MISSING_GXMODEL_DIR>",
+            "--observer",
+            observer or "<MISSING_OBSERVER>",
+            "--external-box",
+            external_box or "<MISSING_EXTERNAL_BOX>",
+        ]
+        if interactive:
+            parts.append("--interactive")
+        if not euv:
+            parts.append("--no-euv")
+        if not uv:
+            parts.append("--no-uv")
+        if hmifiles:
+            parts += ["--hmifiles", hmifiles]
+        if entry_box:
+            parts += ["--entry-box", entry_box]
+        if empty_box_only:
+            parts.append("--empty-box-only")
+        if potential_only:
+            parts.append("--potential-only")
+        if use_potential:
+            parts.append("--use-potential")
+        if jump2potential:
+            parts.append("--jump2potential")
+        if jump2nlfff:
+            parts.append("--jump2nlfff")
+        if jump2lines:
+            parts.append("--jump2lines")
+        if jump2chromo:
+            parts.append("--jump2chromo")
+        if save_empty_box:
+            parts.append("--save-empty-box")
+        if save_bounds:
+            parts.append("--save-bounds")
+        if save_potential:
+            parts.append("--save-potential")
+        if save_nas:
+            parts.append("--save-nas")
+        if save_gen:
+            parts.append("--save-gen")
+        if save_chr:
+            parts.append("--save-chr")
+        if stop_after:
+            parts += ["--stop-after", stop_after]
+        if not auto_visualize_last:
+            parts.append("--no-auto-visualize-last")
+        return " ".join(shlex.quote(p) for p in parts)
+
+    def _print_info() -> None:
+        print("gxbox options (explicit and implicit):")
+        print("")
+        time_val = time if time is not None else "<MISSING> (required)"
+        coords_val = f"{coords[0]} {coords[1]}" if coords is not None else "<MISSING> (required)"
+        frame = "--hpc" if hpc else "--hgc" if hgc else "--hgs" if hgs else "<MISSING_FRAME>"
+        box_dims_val = f"{box_dims[0]} {box_dims[1]} {box_dims[2]}" if box_dims else "<MISSING>"
+        print(f"  --time           Observation time in ISO format. [value: {time_val}]")
+        print(f"  --coords         Center coordinates. [value: {coords_val}]")
+        print(f"  {frame:<15} Coordinate frame flag (exactly one of --hpc/--hgc/--hgs).")
+        print(f"  --box-dims       Box dimensions [nx ny nz] in pixels. [value: {box_dims_val}]")
+        print(f"  --box-res        Box resolution in Mm per pixel. [value: {box_res}]")
+        print(f"  --pad-frac       Fractional padding applied to each side. [value: {pad_frac}]")
+        print(f"  --observer       Observer location. [value: {observer}]")
+        print(f"  --data-dir       Directory for downloaded data. [value: {data_dir}]")
+        print(f"  --gxmodel-dir    Directory for model outputs. [value: {gxmodel_dir}]")
+        print(f"  --external-box   Path to an external box file. [value: {external_box}]")
+        print(f"  --interactive    Drop into pdb after launching. [value: {interactive}]")
+        print(f"  --euv            Download AIA/EUV context maps. [value: {euv}]")
+        print(f"  --uv             Download AIA/UV context maps. [value: {uv}]")
+        print(f"  --hmifiles       Local HMI data directory. [value: {hmifiles}]")
+        print(f"  --entry-box      Preexisting box path. [value: {entry_box}]")
+        print(f"  --empty-box-only Stop after empty box is generated. [value: {empty_box_only}]")
+        print(f"  --potential-only Stop after potential extrapolation. [value: {potential_only}]")
+        print(f"  --use-potential  Skip NLFFF and use potential downstream. [value: {use_potential}]")
+        print(f"  --jump2potential Jump to potential stage (requires --entry-box). [value: {jump2potential}]")
+        print(f"  --jump2nlfff     Jump to NLFFF stage (requires --entry-box). [value: {jump2nlfff}]")
+        print(f"  --jump2lines     Jump to GEN stage (requires --entry-box). [value: {jump2lines}]")
+        print(f"  --jump2chromo    Jump to chromo stage (requires --entry-box). [value: {jump2chromo}]")
+        print(f"  --save-empty-box Save NONE stage. [value: {save_empty_box}]")
+        print(f"  --save-bounds    Save BND stage. [value: {save_bounds}]")
+        print(f"  --save-potential Save POT stage. [value: {save_potential}]")
+        print(f"  --save-nas       Save NAS stage. [value: {save_nas}]")
+        print(f"  --save-gen       Save NAS.GEN stage. [value: {save_gen}]")
+        print(f"  --save-chr       Save NAS.CHR stage. [value: {save_chr}]")
+        print(f"  --stop-after     Stop after stage (pot|nas|gen|chr). [value: {stop_after}]")
+        print(f"  --auto-visualize-last Auto-launch 3D viewer for last stage. [value: {auto_visualize_last}]")
+        print("")
+        print("Implicit behaviors:")
+        print("  - Exactly one coordinate frame flag must be set (--hpc/--hgc/--hgs).")
+        if time is None:
+            print("  - WARNING: --time is required for actual execution.")
+        if coords is None:
+            print("  - WARNING: --coords is required for actual execution.")
+        if not (hpc or hgc or hgs):
+            print("  - WARNING: one of --hpc/--hgc/--hgs is required for actual execution.")
+        if (jump2potential or jump2nlfff or jump2lines or jump2chromo) and not entry_box:
+            print("  - WARNING: jump2* flags are ignored unless --entry-box is provided.")
+        print("  - The gxbox GUI launches unless --info is used.")
+        print("  - The last stage is always saved; additional stages depend on save flags.")
+        print("  - The full gxbox command is recorded into HDF5 metadata/execute.")
+
+    if info:
+        _print_info()
+        raise SystemExit(0)
+
+    if time is None:
+        raise typer.BadParameter("--time is required unless --info is used.")
+    if coords is None:
+        raise typer.BadParameter("--coords is required unless --info is used.")
+    if not (hpc or hgc or hgs):
+        raise typer.BadParameter("Exactly one coordinate frame must be specified: use either --hpc, --hgc, or --hgs.")
+    if empty_box_only:
+        save_empty_box = True
+        stop_after = "none"
+    if potential_only:
+        save_potential = True
+        stop_after = "pot"
+
     observation_time = Time(time)
 
     # Determine observer location
@@ -1275,6 +1659,7 @@ def main(
 
     # Instantiate Qt application and GxBox
     app_instance = QApplication([])
+    execute_cmd = _build_execute_cmd()
     gxbox = GxBox(
         observation_time,
         observer_coord,
@@ -1285,6 +1670,26 @@ def main(
         data_dir=data_dir,
         gxmodel_dir=gxmodel_dir,
         external_box=external_box,
+        execute_cmd=execute_cmd,
+        euv=euv,
+        uv=uv,
+        hmifiles=hmifiles,
+        entry_box=entry_box,
+        empty_box_only=empty_box_only,
+        potential_only=potential_only,
+        use_potential=use_potential,
+        jump2potential=jump2potential,
+        jump2nlfff=jump2nlfff,
+        jump2lines=jump2lines,
+        jump2chromo=jump2chromo,
+        save_empty_box=save_empty_box,
+        save_bounds=save_bounds,
+        save_potential=save_potential,
+        save_nas=save_nas,
+        save_gen=save_gen,
+        save_chr=save_chr,
+        stop_after=stop_after,
+        auto_visualize_last=auto_visualize_last,
     )
     gxbox.show()
 

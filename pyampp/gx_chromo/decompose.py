@@ -1,5 +1,26 @@
 import numpy as np
 
+
+def _closest_idx(values: np.ndarray, target: float) -> int:
+    return int(np.argmin(np.abs(values - target)))
+
+
+def _histogram_cdf(values: np.ndarray, nbins: int, data_range: tuple[float, float]) -> tuple[np.ndarray, np.ndarray]:
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return np.array([]), np.array([])
+    if not np.isfinite(data_range[0]) or not np.isfinite(data_range[1]):
+        vmin = float(np.nanmin(values))
+        vmax = float(np.nanmax(values))
+        data_range = (vmin, vmax)
+    hist, bin_edges = np.histogram(values[finite], bins=nbins, range=data_range)
+    xbin = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    cdf = np.cumsum(hist, dtype=np.float64)
+    if cdf.size:
+        cdf = cdf / cdf[-1]
+    return xbin, cdf
+
+
 def decompose(mag, cont):
     mag_qs = 10  # 10 Gauss for QS
     thr_plage = 3  # MF in plage is thr_plage times stronger than QS
@@ -9,17 +30,25 @@ def decompose(mag, cont):
     cutoff_qs = np.sum(cont[sub]) / count
     print("cutoff_qs: ", cutoff_qs, count)
 
-    pdf = np.histogram(cont.flat, bins=cont.size)
-    pdf_sub = np.histogram(cont[sub].flat, bins=cont.size)
+    nbins = cont.size
+    data_range = (float(np.min(cont)), float(np.max(cont)))
 
-    cutoff_b = pdf_sub[1][-1]
-    cutoff_f = pdf_sub[1][-1]
-    pdf_sub = np.histogram(cont[sub].flat, bins=cont.size)
+    # all pixels in FOV (including sunspots) - kept for parity with IDL flow
+    xbin, cdf = _histogram_cdf(cont.ravel(), nbins, data_range)
+    if cdf.size:
+        cutoff_b = xbin[_closest_idx(cdf, 0.75)]
+        cutoff_f = xbin[_closest_idx(cdf, 0.97)]
+    else:
+        cutoff_b = cutoff_f = data_range[1]
 
     # exclude sunspots
-    sub = (cont > (cutoff_qs * 0.9))
-    cutoff_b = np.quantile(cont[sub], 0.75)
-    cutoff_f = np.quantile(cont[sub], 0.97)
+    sub = cont > (cutoff_qs * 0.9)
+    xbin, cdf = _histogram_cdf(cont[sub].ravel(), nbins, data_range)
+    if cdf.size:
+        cutoff_b = xbin[_closest_idx(cdf, 0.75)]
+        cutoff_f = xbin[_closest_idx(cdf, 0.97)]
+    else:
+        cutoff_b = cutoff_f = data_range[1]
 
     print("cutoff_b: ", cutoff_b)
     print("cutoff_f: ", cutoff_f)

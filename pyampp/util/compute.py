@@ -41,7 +41,7 @@ def cutout2box(_map, center_x, center_y, dx_km, shape):
     box_header = sunpy.map.make_fitswcs_header(shape, origin,
                                                projection_code='CEA', scale=scale)
 
-    outmap = _map.reproject_to(box_header, algorithm="adaptive", roundtrip_coords=False)
+    outmap = _map.reproject_to(box_header, algorithm="exact")
     return outmap
 
 
@@ -87,7 +87,8 @@ def hmi_b2ptr(map_field, map_inclination, map_azimuth):
     bptr[1, :, :] = k21 * b_xi + k22 * b_eta + k23 * b_zeta
     bptr[2, :, :] = k11 * b_xi + k12 * b_eta + k13 * b_zeta
 
-    header = map_field.fits_header
+    # Preserve HMI RSUN in WCS metadata for downstream reprojection parity.
+    header = map_field.meta
     map_bp = sunpy.map.Map(bptr[0, :, :], header)
     map_bt = sunpy.map.Map(bptr[1, :, :], header)
     map_br = sunpy.map.Map(bptr[2, :, :], header)
@@ -220,4 +221,3 @@ def ampp_field(dl_path, out_model, x, y, dx, dy, dz, res):
     #     chromo_ds.create_dataset(k, data=chromo_box[k])
     # out_file.flush()
     out_file.close()
-

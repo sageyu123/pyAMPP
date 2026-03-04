@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QComboBox, QLabel, \
-    QPushButton, QSlider, QLineEdit, QCheckBox, QMessageBox, QMenu, QHeaderView, QFileDialog, QAction, QToolButton, \
+    QPushButton, QDoubleSpinBox, QLineEdit, QCheckBox, QMessageBox, QMenu, QHeaderView, QFileDialog, QAction, QToolButton, \
     QToolBar
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -72,6 +72,7 @@ class MagFieldViewer(BackgroundPlotter):
         self.streamlines = None
         self.sphere_visible = True
         self.plane_visible = True
+        self.use_interp = True
         self.scalar = 'bz'
         self.previous_params = {}
         self.previous_valid_values = {}
@@ -85,11 +86,20 @@ class MagFieldViewer(BackgroundPlotter):
         self.slice_z_input = None
         self.vmin_input = None
         self.vmax_input = None
+        self.slice_z_min = 0.0
+        self.slice_z_max = 0.0
+        self.scalar_min = 0.0
+        self.scalar_max = 0.0
         self.update_button = None
         self.send_button = None
         self.parallel_proj_button = None
         self.timestr = time.to_datetime().strftime("_%Y%m%dT%H%M%S") if time is not None else ''
-        self.b3dtype = b3dtype
+        if b3dtype in ("pot", "nlfff"):
+            self.b3dtype = "corona"
+            self.corona_type = b3dtype
+        else:
+            self.b3dtype = b3dtype
+            self.corona_type = None
         # self.sphere_checkbox = None
         self.grid_x = self.box.grid_coords['x'].value
         self.grid_y = self.box.grid_coords['y'].value
@@ -434,11 +444,15 @@ class MagFieldViewer(BackgroundPlotter):
 
         slice_z_label = QLabel("Z [Mm]:")
         slice_z_label.setToolTip(f"Enter the Z coordinate for the slice in the range of 0 to {self.grid_zmax:.2f} Mm.")
-        self.slice_z_input = QLineEdit(
-            f"{0:.2f}")
-        self.slice_z_input.returnPressed.connect(lambda: self._on_slice_z_input_returnPressed(self.slice_z_input))
+        self.slice_z_input = QDoubleSpinBox()
+        self.slice_z_input.setDecimals(2)
+        self.slice_z_input.setRange(0, self.grid_zmax)
+        self.slice_z_input.setSingleStep(max(self.grid_zmax / 200, 0.1))
+        self.slice_z_input.setAccelerated(True)
+        self.slice_z_input.setValue(0.0)
+        self.slice_z_input.valueChanged.connect(lambda: self._on_slice_z_input_returnPressed(self.slice_z_input))
         self.slice_z_input.setToolTip(
-            f"Enter the Z coordinate for the slice in the range of 0 to {self.grid_zmax:.2f} Mm.")
+            f"Use arrows or mouse wheel. Range: 0 to {self.grid_zmax:.2f} Mm.")
         slice_control_layout.addWidget(slice_z_label)
         slice_control_layout.addWidget(self.slice_z_input)
 
@@ -453,21 +467,37 @@ class MagFieldViewer(BackgroundPlotter):
 
         vmin_vmax_label = QLabel("Vmin/Vmax [G]:")
         vmin_vmax_label.setToolTip("Enter the minimum and maximum values for the color scale.")
-        self.vmin_input = QLineEdit("-1000")
-        self.vmin_input.setToolTip("Enter the minimum value for the color scale.")
-        self.vmin_input.returnPressed.connect(lambda: self._on_vmin_input_returnPressed(self.vmin_input))
+        self.vmin_input = QDoubleSpinBox()
+        self.vmin_input.setDecimals(2)
+        self.vmin_input.setRange(-5e4, 5e4)
+        self.vmin_input.setSingleStep(10.0)
+        self.vmin_input.setAccelerated(True)
+        self.vmin_input.setValue(-1000.0)
+        self.vmin_input.valueChanged.connect(lambda: self._on_vmin_input_returnPressed(self.vmin_input))
+        self.vmin_input.setToolTip("Use arrows or mouse wheel to change Vmin.")
         slice_control_layout.addWidget(vmin_vmax_label)
         slice_control_layout.addWidget(self.vmin_input)
 
-        self.vmax_input = QLineEdit("1000")
-        self.vmax_input.setToolTip("Enter the maximum value for the color scale.")
-        self.vmax_input.returnPressed.connect(lambda: self._on_vmax_input_returnPressed(self.vmax_input))
+        self.vmax_input = QDoubleSpinBox()
+        self.vmax_input.setDecimals(2)
+        self.vmax_input.setRange(-5e4, 5e4)
+        self.vmax_input.setSingleStep(10.0)
+        self.vmax_input.setAccelerated(True)
+        self.vmax_input.setValue(1000.0)
+        self.vmax_input.valueChanged.connect(lambda: self._on_vmax_input_returnPressed(self.vmax_input))
+        self.vmax_input.setToolTip("Use arrows or mouse wheel to change Vmax.")
         slice_control_layout.addWidget(self.vmax_input)
 
         self.plane_checkbox = QCheckBox("Show Plane")
         self.plane_checkbox.setChecked(True)
         self.plane_checkbox.stateChanged.connect(self.toggle_plane_visibility)
         slice_control_layout.addWidget(self.plane_checkbox)
+
+        self.interp_checkbox = QCheckBox("Interpolate")
+        self.interp_checkbox.setChecked(True)
+        self.interp_checkbox.setToolTip("Toggle interpolation for slice display.")
+        self.interp_checkbox.stateChanged.connect(self.update_plot)
+        slice_control_layout.addWidget(self.interp_checkbox)
         slice_control_layout.addStretch()
 
         slice_control_group.setLayout(slice_control_layout)
@@ -832,13 +862,19 @@ class MagFieldViewer(BackgroundPlotter):
             The valid value.
         '''
         try:
-            value = float(widget.text())
+            if isinstance(widget, QDoubleSpinBox):
+                value = float(widget.value())
+            else:
+                value = float(widget.text())
             if not min_val <= value <= max_val:
                 original_value = min_val if value < min_val else max_val
                 raise ValueError
 
             if paired_widget:
-                paired_value = float(paired_widget.text())
+                if isinstance(paired_widget, QDoubleSpinBox):
+                    paired_value = float(paired_widget.value())
+                else:
+                    paired_value = float(paired_widget.text())
                 if paired_type == 'vmin' and value >= paired_value:
                     raise ValueError
                 if paired_type == 'vmax' and value <= paired_value:
@@ -860,13 +896,54 @@ class MagFieldViewer(BackgroundPlotter):
             #     QMessageBox.warning(self, "Invalid Input",
             #                         f"Please enter a number between {min_val:.3f} and {max_val:.3f}. Revert to the original value.")
 
-            widget.setText(str(original_value))
+            if isinstance(widget, QDoubleSpinBox):
+                widget.setValue(float(original_value))
+            else:
+                widget.setText(str(original_value))
             return original_value
+
+    def _set_slice_slider_range(self):
+        self.slice_z_min = float(self.grid_zmin)
+        self.slice_z_max = float(self.grid_zmax)
+        if self.slice_z_input is None:
+            return
+        self.slice_z_input.blockSignals(True)
+        self.slice_z_input.setRange(self.slice_z_min, self.slice_z_max)
+        step = max((self.slice_z_max - self.slice_z_min) / 200.0, 0.1)
+        self.slice_z_input.setSingleStep(step)
+        self.slice_z_input.blockSignals(False)
+
+    def _set_scalar_range(self, scalar_name):
+        data = None
+        if scalar_name in self.grid.array_names:
+            data = self.grid[scalar_name]
+        elif self.bottom_name is not None and scalar_name == self.bottom_name:
+            data = self.grid_bottom[scalar_name]
+        if data is None:
+            return
+        self.scalar_min = float(np.nanmin(data))
+        self.scalar_max = float(np.nanmax(data))
+        if self.scalar_min == self.scalar_max:
+            self.scalar_min -= 1.0
+            self.scalar_max += 1.0
+
+        if self.vmin_input is not None and self.vmax_input is not None:
+            self.vmin_input.blockSignals(True)
+            self.vmax_input.blockSignals(True)
+            self.vmin_input.setRange(self.scalar_min, self.scalar_max)
+            self.vmax_input.setRange(self.scalar_min, self.scalar_max)
+            step = max((self.scalar_max - self.scalar_min) / 200.0, 1.0)
+            self.vmin_input.setSingleStep(step)
+            self.vmax_input.setSingleStep(step)
+            self.vmin_input.blockSignals(False)
+            self.vmax_input.blockSignals(False)
 
     def init_grid(self):
         x = self.grid_x
         y = self.grid_y
         z = self.grid_z
+
+        self.bottom_name = None
 
         bx = self.box.b3d[self.b3dtype]['bx']
         by = self.box.b3d[self.b3dtype]['by']
@@ -877,6 +954,8 @@ class MagFieldViewer(BackgroundPlotter):
         self.grid.dimensions = (len(x), len(y), len(z))
         self.grid.spacing = (x[1] - x[0], y[1] - y[0], z[1] - z[0])
         self.grid.origin = (x.min(), y.min(), z.min())
+        self.grid_dims = (len(x), len(y), len(z))
+        self.grid_spacing = self.grid.spacing
 
         self.grid['bx'] = bx.ravel(order='F')
         self.grid['by'] = by.ravel(order='F')
@@ -888,25 +967,36 @@ class MagFieldViewer(BackgroundPlotter):
         self.grid_bottom.dimensions = (len(x), len(y), 1)
         self.grid_bottom.spacing = (x[1] - x[0], y[1] - y[0], 0)
         self.grid_bottom.origin = (x.min(), y.min(), z.min())
-        self.bottom_name = self.parent.mapBottomSelector.currentText()
-        self.grid_bottom[self.bottom_name] = self.parent.map_bottom.data.T.ravel(order='F')
-        self.scalar_selector_items.append(self.bottom_name)
+        if self.parent is not None and hasattr(self.parent, "mapBottomSelector") and hasattr(self.parent, "map_bottom"):
+            self.bottom_name = self.parent.mapBottomSelector.currentText()
+            self.grid_bottom[self.bottom_name] = self.parent.map_bottom.data.T.ravel(order='F')
+            self.scalar_selector_items.append(self.bottom_name)
+
+        self._set_slice_slider_range()
+        self._set_scalar_range(self.scalar)
 
 
     def init_plot(self):
         """
         Initializes and displays the plot with the magnetic field data.
         """
+        self._set_slice_slider_range()
+        self._set_scalar_range(self.scalar)
+
+        def _val(widget):
+            if isinstance(widget, QDoubleSpinBox):
+                return float(widget.value())
+            return float(widget.text())
 
         self.previous_valid_values = {
-            self.center_x_input: float(self.center_x_input.text()),
-            self.center_y_input: float(self.center_y_input.text()),
-            self.center_z_input: float(self.center_z_input.text()),
-            self.radius_input: float(self.radius_input.text()),
-            self.slice_z_input: float(self.slice_z_input.text()),
+            self.center_x_input: _val(self.center_x_input),
+            self.center_y_input: _val(self.center_y_input),
+            self.center_z_input: _val(self.center_z_input),
+            self.radius_input: _val(self.radius_input),
+            self.slice_z_input: _val(self.slice_z_input),
             self.n_points_input: int(self.n_points_input.text()),
-            self.vmin_input: float(self.vmin_input.text()),
-            self.vmax_input: float(self.vmax_input.text())
+            self.vmin_input: _val(self.vmin_input),
+            self.vmax_input: _val(self.vmax_input)
         }
 
         self.update_plot(init=True)
@@ -937,16 +1027,17 @@ class MagFieldViewer(BackgroundPlotter):
             self.update_sphere()
 
         self.update_plane()
+        scalar = self.scalar_selector.currentText()
+        self._set_scalar_range(scalar)
         slice_z = self.validate_input(self.slice_z_input, 0, self.grid_zmax,
                                       self.previous_valid_values[self.slice_z_input])
         vmin = self.validate_input(self.vmin_input, -5e4, 5e4, self.previous_valid_values[self.vmin_input],
                                    paired_widget=self.vmax_input, paired_type='vmin')
         vmax = self.validate_input(self.vmax_input, -5e4, 5e4, self.previous_valid_values[self.vmax_input],
                                    paired_widget=self.vmin_input, paired_type='vmax')
-
-        scalar = self.scalar_selector.currentText()
         sphere_visible = self.viz_sphere_button.isChecked()
         plane_visible = self.plane_visible
+        use_interp = self.interp_checkbox.isChecked() if self.interp_checkbox is not None else True
 
         # Create a dictionary of current parameters
         current_params = {
@@ -959,6 +1050,7 @@ class MagFieldViewer(BackgroundPlotter):
             "vmin": vmin,
             "vmax": vmax,
             "scalar": scalar,
+            "use_interp": use_interp,
             "sphere_visible": sphere_visible,
             "plane_visible": plane_visible
         }
@@ -972,9 +1064,10 @@ class MagFieldViewer(BackgroundPlotter):
         if current_params['slice_z'] != self.previous_params.get('slice_z') or \
                 current_params['scalar'] != self.previous_params.get('scalar') or \
                 current_params['vmin'] != self.previous_params.get('vmin') or \
-                current_params['vmax'] != self.previous_params.get('vmax'):
+                current_params['vmax'] != self.previous_params.get('vmax') or \
+                current_params['use_interp'] != self.previous_params.get('use_interp'):
             self.update_slice(current_params['slice_z'], current_params['scalar'], current_params['vmin'],
-                              current_params['vmax'])
+                              current_params['vmax'], current_params['use_interp'])
 
         if current_params['plane_visible'] != self.previous_params.get('plane_visible'):
             self.update_plane_visibility(current_params['plane_visible'])
@@ -999,7 +1092,7 @@ class MagFieldViewer(BackgroundPlotter):
         self.updating_flag = False  # Reset the flag
         self.reset_camera_clipping_range()
 
-    def update_slice(self, slice_z, scalar, vmin, vmax):
+    def update_slice(self, slice_z, scalar, vmin, vmax, use_interp=True):
         """
         Updates the slice plot based on the given parameters.
 
@@ -1012,7 +1105,7 @@ class MagFieldViewer(BackgroundPlotter):
         :param vmax: float
             The maximum value for the color scale.
         """
-        if scalar == self.bottom_name:
+        if self.bottom_name is not None and scalar == self.bottom_name:
             # Display the new scalar data as a 2D plane
             if self.bottom_slice_actor is None:
                 self.bottom_slice_actor = self.add_mesh(self.grid_bottom, scalars=scalar, clim=(vmin, vmax),
@@ -1027,15 +1120,92 @@ class MagFieldViewer(BackgroundPlotter):
         else:
             if slice_z==0:
                 slice_z = 1.0e-6
-            new_slice = self.grid.slice(normal='z', origin=(self.grid.origin[0], self.grid.origin[1], slice_z))
+            if use_interp:
+                new_slice = self.grid.slice(normal='z', origin=(self.grid.origin[0], self.grid.origin[1], slice_z))
+                pref = 'point'
+                scalar_name = scalar
+                scalars = scalar_name
+            else:
+                spacing_z = self.grid_spacing[2]
+                idx = int(round((slice_z - self.grid.origin[2]) / spacing_z))
+                idx = max(0, min(idx, self.grid_dims[2] - 1))
+                z_pos = slice_z
+
+                nx, ny, nz = self.grid_dims
+                if scalar in ('bx', 'by', 'bz'):
+                    cube = self.box.b3d[self.b3dtype][scalar]
+                else:
+                    cube = self.box.b3d[self.b3dtype]['bz']
+
+                cube = np.asarray(cube)
+                if cube.ndim == 4 and cube.shape[-1] == 3 and scalar in ('bx', 'by', 'bz'):
+                    comp_idx = {'bx': 0, 'by': 1, 'bz': 2}[scalar]
+                    cube = cube[..., comp_idx]
+
+                if cube.ndim != 3 and cube.size == nx * ny * nz:
+                    cube = cube.reshape((nx, ny, nz), order='F')
+
+                if cube.ndim == 3:
+                    slice_data = cube[:, :, idx]
+                elif cube.ndim == 2 and cube.size == nx * ny:
+                    slice_data = cube
+                else:
+                    # Fallback to interpolated slice if cube shape is unexpected
+                    new_slice = self.grid.slice(normal='z', origin=(self.grid.origin[0], self.grid.origin[1], slice_z))
+                    pref = 'point'
+                    scalar_name = scalar
+                    scalars = scalar_name
+                    if self.bottom_slice_actor is None:
+                        self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
+                                                                cmap='gray', pickable=False, show_scalar_bar=False,
+                                                                preference=pref)
+                    else:
+                        self.remove_actor(self.bottom_slice_actor)
+                        self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
+                                                                cmap='gray', pickable=False, reset_camera=False,
+                                                                show_scalar_bar=False, preference=pref)
+                    return
+
+                if slice_data.size != nx * ny:
+                    if slice_data.size == nx * ny:
+                        slice_data = slice_data.reshape((nx, ny), order='F')
+                    else:
+                        # Fallback to interpolated slice if reshaping is impossible
+                        new_slice = self.grid.slice(normal='z', origin=(self.grid.origin[0], self.grid.origin[1], slice_z))
+                        pref = 'point'
+                        scalar_name = scalar
+                        scalars = scalar_name
+                        if self.bottom_slice_actor is None:
+                            self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
+                                                                    cmap='gray', pickable=False, show_scalar_bar=False,
+                                                                    preference=pref)
+                        else:
+                            self.remove_actor(self.bottom_slice_actor)
+                            self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
+                                                                    cmap='gray', pickable=False, reset_camera=False,
+                                                                    show_scalar_bar=False, preference=pref)
+                        return
+
+                flat_slice = slice_data.ravel(order='F')
+                spacing_x = (self.grid_xmax - self.grid_xmin) / float(nx)
+                spacing_y = (self.grid_ymax - self.grid_ymin) / float(ny)
+                scalar_name = "slice_scalar"
+                new_slice = pv.ImageData(dimensions=(nx + 1, ny + 1, 1),
+                                         spacing=(spacing_x, spacing_y, 1),
+                                         origin=(self.grid_xmin, self.grid_ymin, z_pos))
+                new_slice.cell_data[scalar_name] = flat_slice
+                new_slice.set_active_scalars(scalar_name, preference='cell')
+                pref = 'cell'
+                scalars = scalar_name
             if self.bottom_slice_actor is None:
-                self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalar, clim=(vmin, vmax), show_edges=False,
-                                                        cmap='gray', pickable=False, show_scalar_bar=False)
+                self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
+                                                        cmap='gray', pickable=False, show_scalar_bar=False,
+                                                        preference=pref)
             else:
                 self.remove_actor(self.bottom_slice_actor)
-                self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalar, clim=(vmin, vmax), show_edges=False,
+                self.bottom_slice_actor = self.add_mesh(new_slice, scalars=scalars, clim=(vmin, vmax), show_edges=False,
                                                         cmap='gray', pickable=False, reset_camera=False,
-                                                        show_scalar_bar=False)
+                                                        show_scalar_bar=False, preference=pref)
 
     def create_streamlines(self, center_x, center_y, center_z, radius, n_points):
         self.streamlines = self.grid.streamlines(vectors='vectors', source_center=(center_x, center_y, center_z),
@@ -1191,7 +1361,6 @@ class MagFieldViewer(BackgroundPlotter):
         :param center: list of float
             The new center coordinates of the sphere.
         """
-        print('calling _on_sphere_moved')
         self.center_x_input.setText(f"{center[0]:.2f}")
         self.center_y_input.setText(f"{center[1]:.2f}")
         self.center_z_input.setText(f"{center[2]:.2f}")
@@ -1241,7 +1410,7 @@ class MagFieldViewer(BackgroundPlotter):
         """
         if self.plane_actor is not None:
             origin = np.ptp(self.grid_x) / 2, np.ptp(self.grid_y) / 2
-            slice_z = float(self.slice_z_input.text())
+            slice_z = float(self.slice_z_input.value()) if isinstance(self.slice_z_input, QDoubleSpinBox) else float(self.slice_z_input.text())
             self.plane_actor.SetOrigin([origin[0], origin[1], slice_z])
             self.update_plot()
 
@@ -1255,7 +1424,7 @@ class MagFieldViewer(BackgroundPlotter):
         if plane_visible:
             if self.plane_actor is None:
                 origin = np.ptp(self.grid_x) / 2, np.ptp(self.grid_y) / 2
-                slice_z = float(self.slice_z_input.text())
+                slice_z = float(self.slice_z_input.value()) if isinstance(self.slice_z_input, QDoubleSpinBox) else float(self.slice_z_input.text())
                 self.plane_actor = self.add_plane_widget(self._on_plane_moved, normal='z',
                                                          origin=(origin[0], origin[1], slice_z), bounds=(
                         self.grid_xmin, self.grid_xmax, self.grid_ymin, self.grid_ymax, self.grid_zmin, self.grid_zmax),
@@ -1275,7 +1444,10 @@ class MagFieldViewer(BackgroundPlotter):
         :param origin: list of float
             The new origin coordinates of the plane.
         """
-        self.slice_z_input.setText(f"{origin[2]:.2f}")
+        if isinstance(self.slice_z_input, QDoubleSpinBox):
+            self.slice_z_input.setValue(float(origin[2]))
+        else:
+            self.slice_z_input.setText(f"{origin[2]:.2f}")
         self.update_plane()
 
     def toggle_plane_visibility(self, state):
@@ -1312,6 +1484,27 @@ class MagFieldViewer(BackgroundPlotter):
     def load_box(self):
         default_filename = "b3d_data.h5"
         filename = QFileDialog.getOpenFileName(self, "Load Box", default_filename, "HDF5 Files (*.h5)")[0]
+        if not filename:
+            return
         self.box.b3d = read_b3d_h5(filename)
+
+        if "corona" in self.box.b3d:
+            self.b3dtype = "corona"
+        elif "nlfff" in self.box.b3d:
+            self.b3dtype = "corona"
+            self.box.b3d["corona"] = self.box.b3d.pop("nlfff")
+        elif "pot" in self.box.b3d:
+            self.b3dtype = "corona"
+            self.box.b3d["corona"] = self.box.b3d.pop("pot")
+        elif "chromo" in self.box.b3d:
+            self.b3dtype = "chromo"
+            chromo = self.box.b3d.get("chromo", {})
+            if "bx" not in chromo and "bcube" in chromo:
+                bcube = chromo["bcube"]
+                if bcube.ndim == 4 and bcube.shape[-1] == 3:
+                    chromo["bx"] = bcube[:, :, :, 0]
+                    chromo["by"] = bcube[:, :, :, 1]
+                    chromo["bz"] = bcube[:, :, :, 2]
+                    self.box.b3d["chromo"] = chromo
         self.init_grid()
         self.update_plot()

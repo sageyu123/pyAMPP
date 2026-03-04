@@ -1,7 +1,6 @@
 [build-system]
 requires = [
     "setuptools>=62.1",
-    "setuptools_scm[toml]>=6.2",
     "wheel",
     "extension-helpers",
     "numpy>=1.25",
@@ -10,6 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyampp"
+version = "0.2.0"
 description = "Automatic Model Suff"
 readme = "README.rst"
 requires-python = ">=3.10"
@@ -26,11 +26,16 @@ dependencies = ["sunpy[all]",
     "pyAMaFiL",
     "typer",
 ]
-dynamic = ["version"]
 
 [project.scripts]
 pyampp = "pyampp.gxbox.gxampp:app"
 gxbox = "pyampp.gxbox.gxbox_factory:app"
+gxbox-view = "pyampp.gxbox.view_h5:main"
+gx-fov2box = "pyampp.gxbox.gx_fov2box:app"
+gx_fov2box = "pyampp.gxbox.gx_fov2box:app"
+h5tree = "pyampp.util.h5tree:app"
+gxrefmap-view = "pyampp.gxbox.gxrefmap_view:app"
+gx-idl2fov2box = "pyampp.util.idl_execute_to_gxfov2box:main"
 
 [project.optional-dependencies]
 tests = [
@@ -40,7 +45,8 @@ tests = [
 ]
 docs = [
     "sphinx",
-    "sphinx-automodapi",
+    "sphinx-autoapi",
+    "sphinx-rtd-theme",
     "tomli; python_version <\"3.11\"",
 ]
 
@@ -51,9 +57,6 @@ zip-safe = false
 include-package-data = true
 
 [tool.setuptools.packages.find]
-
-[tool.setuptools_scm]
-write_to = "pyampp/_version.py"
 
 [tool.pytest.ini_options]
 testpaths = [

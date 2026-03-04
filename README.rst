@@ -11,6 +11,17 @@ Documentation
 Full documentation is available at:
 https://pyampp.readthedocs.io/en/latest/
 
+Format and viewer references:
+
+- Upgraded HDF5 stage format (NONE/BND/POT/NAS/NAS.GEN/NAS.CHR):
+  ``docs/model_hdf5_format.rst``
+- GUI workflow and command mapping:
+  ``docs/gui_workflow.rst``
+- Viewer guide (``gxbox-view`` and ``gxrefmap-view``):
+  ``docs/viewers.rst``
+- Release notes:
+  ``CHANGELOG.rst``
+
 Overview
 --------
 
@@ -75,26 +86,43 @@ The instructions below use Conda as an example:
 Main Interfaces
 ---------------
 
-pyAMPP installs two GUI applications:
+pyAMPP provides a GUI for building a reproducible CLI command and separate tools for model generation and visualization:
 
-1. **gxampp** – Launches a GUI to select observation time and coordinates. It then invokes `gxbox` to build the 3D model.
-2. **gxbox** – Launches a GUI that builds and displays the 3D magnetic field and plasma model. Can be run independently if coordinates are known.
+1. **pyampp** – Launches a GUI to select observation time, coordinates, and options. It generates a `gx-fov2box` CLI command (shown above the Run button) and can launch it.
+2. **gx-fov2box** – Pure CLI model generator (IDL `gx_fov2box` equivalent). It saves the requested stages and records the full command in `metadata/execute`.
+3. **gxbox** – Launches the map GUI and 3D visualization for browsing existing models.
 
 Usage Examples
 --------------
 
-**1. Launch the time/coord selector (gxampp)**
+**1. Launch the time/coord selector (pyampp)**
 
 .. code-block:: bash
 
-    gxampp
+    pyampp
 
 .. image:: docs/images/pyampp_gui.png
     :alt: pyampp GUI screenshot
     :align: center
     :width: 600px
 
-**2. Launch the modeling GUI directly (Gxbox Map Viewer)**
+**2. Generate a model via CLI (gx-fov2box)**
+
+.. code-block:: bash
+
+    gx-fov2box \
+      --time "2022-03-30T17:22:37" \
+      --coords 34.44988566346035 14.26110705696788 \
+      --hgs \
+      --box-dims 360 180 200 \
+      --dx-km 1400 \
+      --pad-frac 0.25 \
+      --data-dir /path/to/download_dir \
+      --gxmodel-dir /path/to/gx_models_dir \
+      --save-potential \
+      --save-bounds
+
+**3. Launch the modeling GUI directly (Gxbox Map Viewer)**
 
 .. code-block:: bash
 
@@ -128,14 +156,37 @@ Notes:
 - `--coords` takes two floats, separated by space (no brackets or commas).
 - One of `--hpc`, `--hgc`, or `--hgs` must be specified to define the coordinate system.
 - Remaining parameters are optional and have default values.
+- Set ``PYAMPP_JSOC_NOTIFY_EMAIL`` to override the JSOC export notification email (default: ``suncasa-group@njit.edu``).
+
+Entry-Box Resume / Jump Rules
+-----------------------------
+
+``gx-fov2box`` supports ``--entry-box`` with ``.h5`` or ``.sav`` input for stage-aware resume/recompute.
+
+- ``--rebuild``: ignore stage payload and recompute from ``NONE`` using resolved entry parameters.
+- ``--clone-only``: convert/copy an entry box to normalized HDF5 without recomputation (useful as ``convert-from-sav``).
+- Without ``--jump2*``, the pipeline starts from the detected entry stage.
+- When ``--entry-box`` contains ``metadata/execute``, ``--data-dir`` and ``--gxmodel-dir`` default from that execute string.
+- Explicit CLI values for ``--data-dir`` / ``--gxmodel-dir`` always override execute-derived defaults.
+- Jump validation rules are enforced:
+  - backward jumps are allowed,
+  - forward jumps are allowed by one stage,
+  - ``POT -> NAS`` is explicitly allowed (implicit ``POT -> BND -> NAS``),
+  - ``POT -> GEN`` is explicitly allowed (skip both ``BND`` and ``NAS/NLFFF``; keep true POT vectors).
+- Save requests for stages before the selected start stage are ignored with a warning.
+- In ``--clone-only`` mode, only no-jump or jump-to-self is allowed.
 
 Entrypoints
 -----------
 
 After installation, the following commands become available:
 
-- ``gxampp``: Launch the time and location GUI.
-- ``gxbox``: Launch the modeling GUI directly with CLI options.
+- ``pyampp``: Launch the command-builder GUI.
+- ``gx-fov2box``: Run the model-generation pipeline headlessly.
+- ``gxbox``: Launch the modeling/visualization GUI.
+- ``gxbox-view``: Open an existing HDF5 model in the 3D viewer.
+- ``gxrefmap-view``: Open base/refmaps from an HDF5 model in a 2D map browser.
+- ``gx-idl2fov2box``: Translate IDL ``gx_fov2box`` execute strings (or SAV ``EXECUTE``) into Python ``gx-fov2box`` commands.
 
 License
 -------

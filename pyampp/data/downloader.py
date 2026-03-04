@@ -228,7 +228,8 @@ class SDOImageDownloader:
         :return: A list of paths to the downloaded files.
         :rtype: list
         """
-        search_attrs = [a.Time(self.time, self.time), a.jsoc.Series(series), a.jsoc.Notify(JSOC_NOTIFY_EMAIL)]
+        notify_email = jsoc_notify_email()
+        search_attrs = [a.Time(self.time, self.time), a.jsoc.Series(series), a.jsoc.Notify(notify_email)]
         if wavelength:
             search_attrs.insert(-1, wavelength)  # Insert wavelength before notify
         if segments:
