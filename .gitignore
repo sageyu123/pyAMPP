@@ -1,9 +1,95 @@
-.ipynb_checkpoints
-__pycache__
-*.pyc
+# ------------------------------
+# Python bytecode / compiled files
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ------------------------------
+# Native extensions
+# ------------------------------
+*.so
+*.dylib
 *.pyd
-*.pyo
+
+# ------------------------------
+# Packaging / distribution
+# ------------------------------
+.Python
+build/
+dist/
+downloads/
+.eggs/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# ------------------------------
+# Installer logs
+# ------------------------------
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ------------------------------
+# Unit test / coverage
+# ------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+nosetests.xml
+
+# ------------------------------
+# Type checker / linters
+# ------------------------------
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ------------------------------
+# Jupyter / notebooks
+# ------------------------------
+.ipynb_checkpoints/
+
+# ------------------------------
+# Documentation builds
+# ------------------------------
+docs/_build/
+site/
+
+# ------------------------------
+# Virtual environments
+# ------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ------------------------------
+# Pipenv (not used in this project)
+# ------------------------------
+Pipfile
+Pipfile.lock
+
+# ------------------------------
+# IDE/editor settings
+# ------------------------------
+.idea/
+.vscode/
+
+# ------------------------------
+# OS-generated files
+# ------------------------------
+.DS_Store
+Thumbs.db
+
+# ------------------------------
+# Project data products
+# ------------------------------
 *.fits
 *.h5
-build/
-*.egg-info*
