@@ -93,3 +93,14 @@ Thumbs.db
 # ------------------------------
 *.fits
 *.h5
+
+# ------------------------------
+# Local test scratch files (keep local, do not track)
+# ------------------------------
+pyampp/tests/test_compare_b3d.ipynb
+pyampp/tests/test_compare_b3d.py
+pyampp/tests/test_hpc_hgc_conversion.ipynb
+pyampp/tests/test_magfield_viewer.py
+pyampp/tests/test_MagFieldWrapper.py
+pyampp/tests/test_pyampp.sh
+pyampp/tests/writeup.txt
